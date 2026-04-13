@@ -1,0 +1,12 @@
+{
+  "model_name": "cnn_transformer_baseline",
+  "in_channels": 12,
+  "patch_size": 15,
+  "cnn_embedding_dim": 128,
+  "transformer_dim": 128,
+  "transformer_layers": 3,
+  "attention_heads": 4,
+  "dropout": 0.15,
+  "num_crop_classes": 3,
+  "num_phenophases": 7
+}

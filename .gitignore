@@ -1,0 +1,28 @@
+.DS_Store
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+
+# Raw downloaded competition data: keep local, do not push to GitHub.
+downloadedRawData/
+region_train_*/
+points_train_label.csv
+Guide to the Second Round_track1/
+
+# Generated model outputs: keep local.
+artifacts/models/
+artifacts/preprocessing_report/
+
+# Ignore generated arrays by default, but allow the final compact training dataset.
+artifacts/**/*.npy
+artifacts/**/*.npz
+!artifacts/patches_clean/
+!artifacts/patches_clean/train_cnn_transformer_15x15.npz
+
+# Allow small metadata needed to train from the GitHub repo.
+artifacts/normalization/*.json
+!artifacts/normalization/train_patch_band_stats.json
+artifacts/splits/*
+!artifacts/splits/train_val_split.csv
+!artifacts/splits/split_summary.json

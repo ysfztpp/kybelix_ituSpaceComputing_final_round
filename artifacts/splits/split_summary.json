@@ -1,0 +1,27 @@
+{
+  "split_csv": "/Users/yusuf/Desktop/finalround/preprocessing1/artifacts/splits/train_val_split.csv",
+  "seed": 42,
+  "val_fraction": 0.2,
+  "split_mode": "grouped",
+  "stratify_by": "crop_type",
+  "group_by": "resolved_region_id",
+  "train_count": 609,
+  "val_count": 169,
+  "total_count": 778,
+  "train_regions": 41,
+  "val_regions": 8,
+  "class_counts": {
+    "corn": {
+      "train": 148,
+      "val": 81
+    },
+    "rice": {
+      "train": 330,
+      "val": 37
+    },
+    "soybean": {
+      "train": 131,
+      "val": 51
+    }
+  }
+}
