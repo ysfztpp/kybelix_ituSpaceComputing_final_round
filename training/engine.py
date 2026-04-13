@@ -15,11 +15,19 @@ def multitask_loss(outputs: dict[str, torch.Tensor], batch: dict[str, torch.Tens
     target = batch["phenophase_target"]
     valid = target > 0
     if valid.any():
-        pheno_loss = nn.functional.smooth_l1_loss(outputs["phenophase_norm"][valid], target[valid])
+        # L1 on normalized DOY is easier to interpret than default SmoothL1 here.
+        pheno_loss = nn.functional.l1_loss(outputs["phenophase_norm"][valid], target[valid])
+        pheno_mae_days = torch.mean(torch.abs(outputs["phenophase_norm"][valid] - target[valid])) * 366.0
     else:
         pheno_loss = outputs["phenophase_norm"].sum() * 0.0
+        pheno_mae_days = outputs["phenophase_norm"].sum() * 0.0
     total = crop_loss + phenophase_weight * pheno_loss
-    return total, {"loss": float(total.detach().cpu()), "crop_loss": float(crop_loss.detach().cpu()), "phenophase_loss": float(pheno_loss.detach().cpu())}
+    return total, {
+        "loss": float(total.detach().cpu()),
+        "crop_loss": float(crop_loss.detach().cpu()),
+        "phenophase_loss": float(pheno_loss.detach().cpu()),
+        "phenophase_mae_days": float(pheno_mae_days.detach().cpu()),
+    }
 
 
 def _autocast_context(device: torch.device, enabled: bool):
@@ -42,7 +50,7 @@ def run_epoch(
     clip_grad_norm: float = 1.0,
 ) -> dict[str, float]:
     model.train(train)
-    totals: dict[str, float] = {"loss": 0.0, "crop_loss": 0.0, "phenophase_loss": 0.0, "crop_correct": 0.0, "count": 0.0}
+    totals: dict[str, float] = {"loss": 0.0, "crop_loss": 0.0, "phenophase_loss": 0.0, "phenophase_mae_days": 0.0, "crop_correct": 0.0, "count": 0.0}
     accumulation = max(1, int(gradient_accumulation_steps))
     context = torch.enable_grad() if train else torch.no_grad()
     if train:
@@ -76,7 +84,7 @@ def run_epoch(
             preds = outputs["crop_logits"].argmax(dim=1)
             totals["crop_correct"] += float((preds == batch["crop_type_id"]).sum().detach().cpu())
             totals["count"] += batch_size
-            for key in ["loss", "crop_loss", "phenophase_loss"]:
+            for key in ["loss", "crop_loss", "phenophase_loss", "phenophase_mae_days"]:
                 totals[key] += parts[key] * batch_size
     count = max(totals.pop("count"), 1.0)
     return {**{key: value / count for key, value in totals.items() if key != "crop_correct"}, "crop_accuracy": totals["crop_correct"] / count}

@@ -41,7 +41,7 @@ class CNNTransformerBaseline(nn.Module):
             dropout=config.dropout,
             activation="gelu",
             batch_first=True,
-            norm_first=True,
+            norm_first=False,
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=config.transformer_layers)
         self.pool = MaskedTemporalPool()

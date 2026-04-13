@@ -181,3 +181,8 @@ artifacts/models/cnn_transformer_baseline/history.json
 ```
 
 This confirms the model code runs. Treat the 1-epoch metric as a pipeline check, not as final model quality. The default split is grouped by `resolved_region_id` to reduce spatial leakage.
+
+
+## Training Metric Fix
+
+The training log now reports `phenophase_mae_days`. This is more meaningful than only looking at normalized phenophase loss. Crop accuracy can still look very high, so compare `val_phenophase_mae_days` against the simple constant train-mean baseline from `scripts/audit_training_data.py`.

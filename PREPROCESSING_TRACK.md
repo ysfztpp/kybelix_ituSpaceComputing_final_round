@@ -259,3 +259,8 @@ downloadedRawData/region_train_4/
 No raw TIFF contents or label CSV contents were edited in this move. Only file locations changed. `configs/preprocessing.json` was updated to use the new paths.
 
 Raw data size is about `70GB`, so `downloadedRawData/` is ignored by Git. The compact final NPZ is about `83MB` and is configured as trackable if you want Colab to train from the GitHub repo.
+
+
+## Training Metric Fix
+
+The training log now reports `phenophase_mae_days`. This is more meaningful than only looking at normalized phenophase loss. Crop accuracy can still look very high, so compare `val_phenophase_mae_days` against the simple constant train-mean baseline from `scripts/audit_training_data.py`.
