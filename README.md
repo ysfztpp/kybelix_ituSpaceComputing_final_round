@@ -169,7 +169,7 @@ Use the larger GPU-oriented config after cloning the repo. The compact NPZ artif
 python3 scripts/train_baseline.py --config configs/train_colab_gpu.json
 ```
 
-This config uses a larger CNN + Transformer, mixed precision on CUDA, cosine LR schedule, warmup, gradient clipping, early stopping, and best-checkpoint saving. If Colab runs out of memory, lower `batch_size` in `configs/train_colab_gpu.json` from `32` to `16` or `8`.
+This config uses a larger CNN + Transformer, mixed precision on CUDA, cosine LR schedule, warmup, gradient clipping, early stopping, and best-checkpoint saving. It keeps `num_workers` at `0` because the compact compressed NPZ is loaded into memory and multiprocessing workers can trigger zip/zlib read issues. If Colab runs out of memory, lower `batch_size` in `configs/train_colab_gpu.json` from `32` to `16` or `8`.
 
 ## Latest Local Smoke Test
 

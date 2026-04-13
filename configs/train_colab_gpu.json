@@ -9,7 +9,7 @@
   "epochs": 80,
   "learning_rate": 0.0002,
   "weight_decay": 0.02,
-  "num_workers": 2,
+  "num_workers": 0,
   "phenophase_loss_weight": 0.35,
   "device": "auto",
   "amp": true,
