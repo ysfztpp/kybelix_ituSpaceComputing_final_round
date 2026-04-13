@@ -292,3 +292,20 @@ python3 scripts/train_query_classifier.py --config configs/train_query_colab_gpu
 ```
 
 Local CPU smoke test completed for 1 epoch, but local PyTorch does not see Apple MPS in this environment, so full training should be run on Colab GPU.
+
+## 2026-04-13 PDF Recheck And Correction
+
+1. Rechecked `Round2 Project Submission Manual_en_0407.pdf`.
+2. Confirmed the final platform is inference-only, not a training environment.
+3. Confirmed the runtime input is expected under `/input`, mainly `test_point.csv` or `points_test.csv` plus `/input/region_test/*.tiff`.
+4. Confirmed the final output must be `/output/result.json`.
+5. Confirmed our old `scripts/run_inference.py` was not enough for the final task because it wrote a generic point-level JSON instead of the required point-date key format.
+6. Added `scripts/run_query_inference.py` as the final-round inference entry point. It extracts test patches with the same preprocessing core, runs the query-date CNN+Transformer model, and writes point-date JSON.
+7. Added `inference/query_predict.py` for query-date inference using `query_doy` plus the extracted patch time series.
+8. Added `write_point_date_result_json` in `inference/write_submission.py`. It writes keys like `Longitude_Latitude_Date` and values like `[CropType, PhenophaseStage]`.
+9. Added `run.sh` and `Dockerfile` following the manual's `/workspace`, `/input`, and `/output` structure.
+10. Added support for minor test CSV column variants such as `Longtitude`, `lon`, `lat`, `date`, and missing `point_id` fallback.
+11. Added a date-ablation model config with `use_query_doy=false`: `configs/model_query_cnn_transformer_no_date.json` and `configs/train_query_colab_gpu_no_date.json`.
+12. Reason for the ablation: a date-only baseline already predicts rice phenophase stage perfectly on the current validation split, so the high rice-stage validation score is mostly a calendar effect and should not be treated as proof that the image model learned phenology from pixels.
+13. Practical interpretation: crop prediction still needs imagery. Phenophase stage may be strongly determined by query date in this dataset, but we should report that clearly and compare against the no-date ablation before claiming image-based stage learning.
+14. Remaining requirement before official submission: a trained query-model checkpoint must be included at `artifacts/models/query_cnn_transformer_colab/model.pt` or supplied with `CHECKPOINT_PATH`; the competition platform will not train it for us.

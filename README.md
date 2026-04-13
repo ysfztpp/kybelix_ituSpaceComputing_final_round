@@ -214,3 +214,31 @@ python3 scripts/train_query_classifier.py --config configs/train_query_colab_gpu
 ```
 
 Local CPU smoke test completed for 1 epoch, but local PyTorch does not see Apple MPS in this environment, so full training should be run on Colab GPU.
+
+## Final-Round PDF Correction
+
+The final platform is inference-only. It provides `/input/test_point.csv` or `/input/points_test.csv` and `/input/region_test/*.tiff`; the code must write `/output/result.json`.
+
+Use the PDF-aligned inference entry point after a trained query checkpoint exists:
+
+```bash
+./run.sh
+```
+
+or directly:
+
+```bash
+python3 scripts/run_query_inference.py \
+  --input-root /input \
+  --checkpoint artifacts/models/query_cnn_transformer_colab/model.pt \
+  --normalization-json artifacts/normalization/train_patch_band_stats.json \
+  --output-json /output/result.json
+```
+
+Important validation note: the current validation split is not reliable for proving image-based phenology learning. A date-only baseline predicts rice phenophase stage perfectly on this split, so the high rice-stage validation score is mostly a calendar effect. To test whether imagery adds value for stage prediction, run the no-date ablation:
+
+```bash
+python3 scripts/train_query_classifier.py --config configs/train_query_colab_gpu_no_date.json
+```
+
+The crop model is still image-dependent; the date-only audit only explains the suspicious phenophase-stage result.

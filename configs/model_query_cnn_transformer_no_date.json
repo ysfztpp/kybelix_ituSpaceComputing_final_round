@@ -1,5 +1,5 @@
 {
-  "model_name": "query_cnn_transformer_classifier",
+  "model_name": "query_cnn_transformer_classifier_no_date_ablation",
   "in_channels": 12,
   "patch_size": 15,
   "cnn_embedding_dim": 256,
@@ -9,5 +9,5 @@
   "dropout": 0.20,
   "num_crop_classes": 3,
   "num_phenophase_classes": 7,
-  "use_query_doy": true
+  "use_query_doy": false
 }

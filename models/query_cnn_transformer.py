@@ -23,6 +23,7 @@ class QueryCNNTransformerConfig:
     dropout: float = 0.20
     num_crop_classes: int = 3
     num_phenophase_classes: int = 7
+    use_query_doy: bool = True
 
 
 class QueryCNNTransformerClassifier(nn.Module):
@@ -57,6 +58,9 @@ class QueryCNNTransformerClassifier(nn.Module):
         x = self.input_proj(encoded) + self.time_encoding(time_doy)
         x = self.transformer(x, src_key_padding_mask=~time_mask.bool())
         pooled = self.pool(x, time_mask.bool())
-        query = self.query_encoding(query_doy).reshape(batch_size, -1)
+        if self.config.use_query_doy:
+            query = self.query_encoding(query_doy).reshape(batch_size, -1)
+        else:
+            query = torch.zeros_like(pooled)
         fused = torch.cat([pooled, query], dim=1)
         return {"crop_logits": self.crop_head(fused), "stage_logits": self.stage_head(fused)}

@@ -23,10 +23,13 @@ def _region_row_to_meta(row: pd.Series) -> RasterMeta:
 
 
 def unique_points(points_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    required = {"point_id", "Longitude", "Latitude"}
+    points_df = points_df.copy()
+    required = {"Longitude", "Latitude"}
     missing = required - set(points_df.columns)
     if missing:
         raise ValueError(f"point CSV is missing required columns: {sorted(missing)}")
+    if "point_id" not in points_df.columns:
+        points_df["point_id"] = range(1, len(points_df) + 1)
 
     query_rows = points_df.copy().reset_index(drop=False).rename(columns={"index": "query_row_index"})
     agg = {"Longitude": "first", "Latitude": "first"}

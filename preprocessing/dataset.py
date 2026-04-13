@@ -71,6 +71,26 @@ def _normalise_sample_groups(sample_groups: dict[str, int] | None, sample_patch_
     return {"random": random_n, "invalid": invalid_n}
 
 
+def _normalise_point_columns(points_df: pd.DataFrame) -> pd.DataFrame:
+    """Accept minor point CSV column-name variants without changing the canonical schema."""
+    rename: dict[str, str] = {}
+    lower_to_original = {str(col).strip().lower(): col for col in points_df.columns}
+    for canonical, candidates in {
+        "Longitude": ["longitude", "longtitude", "lon", "lng"],
+        "Latitude": ["latitude", "lat"],
+        "point_id": ["point_id", "pointid", "id"],
+        "phenophase_date": ["phenophase_date", "date", "query_date", "datetime"],
+    }.items():
+        if canonical in points_df.columns:
+            continue
+        for candidate in candidates:
+            original = lower_to_original.get(candidate)
+            if original is not None:
+                rename[original] = canonical
+                break
+    return points_df.rename(columns=rename)
+
+
 def _reservoir_consider(
     reservoirs: dict[str, list[dict[str, Any]]],
     seen_counts: dict[str, int],
@@ -204,7 +224,7 @@ def build_patch_dataset(
     seen_counts = {name: 0 for name in sample_groups}
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    points_df = pd.read_csv(points_csv)
+    points_df = _normalise_point_columns(pd.read_csv(points_csv))
     point_meta, query_rows = unique_points(points_df)
 
     file_df = audit_tiff_files(tiff_dirs, root=root, band_order=band_order)
