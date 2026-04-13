@@ -264,3 +264,31 @@ Raw data size is about `70GB`, so `downloadedRawData/` is ignored by Git. The co
 ## Training Metric Fix
 
 The training log now reports `phenophase_mae_days`. This is more meaningful than only looking at normalized phenophase loss. Crop accuracy can still look very high, so compare `val_phenophase_mae_days` against the simple constant train-mean baseline from `scripts/audit_training_data.py`.
+
+
+## PDF-Aligned Query Classifier
+
+After checking the final-round PDF, the correct prediction unit is a point-date query:
+
+```text
+"Longitude_Latitude_Date": ["CropType", "PhenophaseStage"]
+```
+
+So the old date-regression baseline is not the final task model. Added a corrected query classifier:
+
+```text
+data/query_dataset_npz.py
+models/query_cnn_transformer.py
+training/query_engine.py
+scripts/train_query_classifier.py
+configs/model_query_cnn_transformer.json
+configs/train_query_colab_gpu.json
+```
+
+Use this for real training:
+
+```bash
+python3 scripts/train_query_classifier.py --config configs/train_query_colab_gpu.json
+```
+
+Local CPU smoke test completed for 1 epoch, but local PyTorch does not see Apple MPS in this environment, so full training should be run on Colab GPU.
