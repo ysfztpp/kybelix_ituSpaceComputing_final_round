@@ -27,3 +27,6 @@ artifacts/normalization/*.json
 artifacts/splits/*
 !artifacts/splits/train_val_split.csv
 !artifacts/splits/split_summary.json
+submission_work/
+*.tar
+*.tar.gz

@@ -106,6 +106,7 @@ def main() -> None:
         normalization_json=resolve_path(config["normalization_json"]),
         rice_stage_loss_only=bool(config.get("rice_stage_loss_only", True)),
         shuffle_labels_seed=int(config.get("seed", 42)) if args.shuffle_labels else None,
+        include_valid_mask_as_channels=bool(config.get("include_valid_mask_as_channels", False)),
     )
     val_ds = QueryDatePatchDataset(
         npz_path=resolve_path(config["dataset_npz"]),
@@ -113,6 +114,7 @@ def main() -> None:
         split="val",
         normalization_json=resolve_path(config["normalization_json"]),
         rice_stage_loss_only=bool(config.get("rice_stage_loss_only", True)),
+        include_valid_mask_as_channels=bool(config.get("include_valid_mask_as_channels", False)),
     )
 
     pin_memory = device.type == "cuda"

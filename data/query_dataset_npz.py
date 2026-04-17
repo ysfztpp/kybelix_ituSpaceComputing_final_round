@@ -32,6 +32,7 @@ class QueryDatePatchDataset(Dataset):
         normalization_method: str = "zscore",
         rice_stage_loss_only: bool = True,
         shuffle_labels_seed: int | None = None,
+        include_valid_mask_as_channels: bool = False,
     ) -> None:
         if torch is None:
             raise ImportError("torch is required for QueryDatePatchDataset. Install PyTorch before training.")
@@ -47,6 +48,7 @@ class QueryDatePatchDataset(Dataset):
 
         self.normalizer = NpzPatchNormalizer(normalization_json, normalization_method) if normalization_json else None
         self.rice_stage_loss_only = bool(rice_stage_loss_only)
+        self.include_valid_mask_as_channels = bool(include_valid_mask_as_channels)
         rice_id = self._rice_class_id()
 
         rows: list[tuple[int, int, int, int, float]] = []
@@ -91,6 +93,8 @@ class QueryDatePatchDataset(Dataset):
         valid_pixel_mask = self.arrays["valid_pixel_mask"][sample_index].astype(bool)
         if self.normalizer is not None:
             patches = self.normalizer(patches, valid_pixel_mask)
+        if self.include_valid_mask_as_channels:
+            patches = np.concatenate([patches, valid_pixel_mask.astype(np.float32)], axis=1)
         return {
             "patches": torch.from_numpy(patches.astype(np.float32, copy=False)),
             "valid_pixel_mask": torch.from_numpy(valid_pixel_mask),

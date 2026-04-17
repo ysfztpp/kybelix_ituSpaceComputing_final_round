@@ -1,0 +1,15 @@
+# Track 1 submission settings. Keep container paths consistent with the manual.
+# Only change mount values if the platform template requires it.
+variables:
+  DATASETS: "/input"
+  OUTPUT_DIR: "/output"
+  START_CMD: "./run.sh"
+
+stages:
+  - submit
+
+submit:
+  stage: submit
+  script:
+    - echo "Track 1 submission uses /input and writes /output/result.json"
+    - echo "START_CMD=${START_CMD}"
