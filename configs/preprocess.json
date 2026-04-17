@@ -11,39 +11,10 @@
   "report_dir": "artifacts/preprocessing_report",
   "patch": {
     "size": 15,
-    "bands": [
-      "B01",
-      "B02",
-      "B03",
-      "B04",
-      "B05",
-      "B06",
-      "B07",
-      "B08",
-      "B8A",
-      "B09",
-      "B11",
-      "B12"
-    ],
-    "invalid_fill_value": 0.0,
+    "bands": ["B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B09", "B11", "B12"],
     "valid_min_exclusive": 0.0,
     "valid_max_inclusive": 2.0,
-    "border_policy": "edge_replication"
-  },
-  "report": {
-    "enabled": true,
-    "random_seed": 42,
-    "sample_bands": [
-      "B04",
-      "B08",
-      "B11"
-    ],
-    "sample_groups": {
-      "random": 4,
-      "invalid": 4,
-      "edge": 4
-    },
-    "invalid_sample_valid_ratio_below": 0.98
+    "invalid_fill_value": 0.0
   },
   "split": {
     "enabled": true,
@@ -52,5 +23,12 @@
     "random_seed": 42,
     "stratify_by": "crop_type",
     "group_by": "resolved_region_id"
+  },
+  "report": {
+    "enabled": true,
+    "random_seed": 42,
+    "sample_bands": ["B04", "B08", "B11"],
+    "sample_groups": {"random": 2, "invalid": 2, "edge": 2},
+    "invalid_sample_valid_ratio_below": 0.98
   }
 }

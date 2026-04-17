@@ -29,6 +29,18 @@ def query_loss(outputs: dict[str, torch.Tensor], batch: dict[str, torch.Tensor],
     return total, {"loss": float(total.detach().cpu()), "crop_loss": float(crop_loss.detach().cpu()), "stage_loss": float(stage_loss.detach().cpu())}
 
 
+def _macro_f1(y_true: list[int], y_pred: list[int], labels: range) -> float:
+    scores: list[float] = []
+    for label in labels:
+        tp = sum(1 for true, pred in zip(y_true, y_pred) if true == label and pred == label)
+        fp = sum(1 for true, pred in zip(y_true, y_pred) if true != label and pred == label)
+        fn = sum(1 for true, pred in zip(y_true, y_pred) if true == label and pred != label)
+        precision = tp / (tp + fp) if (tp + fp) else 0.0
+        recall = tp / (tp + fn) if (tp + fn) else 0.0
+        scores.append((2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0)
+    return sum(scores) / max(len(scores), 1)
+
+
 def run_query_epoch(
     model,
     loader,
@@ -43,6 +55,10 @@ def run_query_epoch(
 ) -> dict[str, float]:
     model.train(train)
     totals = {"loss": 0.0, "crop_loss": 0.0, "stage_loss": 0.0, "crop_correct": 0.0, "stage_correct": 0.0, "rice_stage_correct": 0.0, "count": 0.0, "rice_stage_count": 0.0}
+    crop_true: list[int] = []
+    crop_pred_all: list[int] = []
+    rice_stage_true: list[int] = []
+    rice_stage_pred: list[int] = []
     accumulation = max(1, int(gradient_accumulation_steps))
     context = torch.enable_grad() if train else torch.no_grad()
     if train:
@@ -80,6 +96,11 @@ def run_query_epoch(
             totals["rice_stage_correct"] += float(((stage_pred == batch["phenophase_stage_id"]).float() * stage_weight).sum().detach().cpu())
             totals["rice_stage_count"] += float(stage_weight.sum().detach().cpu())
             totals["count"] += batch_size
+            crop_true.extend(batch["crop_type_id"].detach().cpu().tolist())
+            crop_pred_all.extend(crop_pred.detach().cpu().tolist())
+            rice_mask = stage_weight > 0
+            rice_stage_true.extend(batch["phenophase_stage_id"][rice_mask].detach().cpu().tolist())
+            rice_stage_pred.extend(stage_pred[rice_mask].detach().cpu().tolist())
             for key in ["loss", "crop_loss", "stage_loss"]:
                 totals[key] += parts[key] * batch_size
     count = max(totals["count"], 1.0)
@@ -89,8 +110,10 @@ def run_query_epoch(
         "crop_loss": totals["crop_loss"] / count,
         "stage_loss": totals["stage_loss"] / count,
         "crop_accuracy": totals["crop_correct"] / count,
+        "crop_macro_f1": _macro_f1(crop_true, crop_pred_all, range(3)),
         "stage_accuracy_all_crops": totals["stage_correct"] / count,
         "rice_stage_accuracy": totals["rice_stage_correct"] / rice_count,
+        "rice_stage_macro_f1": _macro_f1(rice_stage_true, rice_stage_pred, range(7)),
     }
 
 

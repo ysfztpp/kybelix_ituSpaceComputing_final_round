@@ -13,6 +13,7 @@ Guide to the Second Round_track1/
 # Generated model outputs: keep local.
 artifacts/models/
 artifacts/preprocessing_report/
+artifacts/audit/
 
 # Ignore generated arrays by default, but allow the final compact training dataset.
 artifacts/**/*.npy

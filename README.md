@@ -1,244 +1,153 @@
-# Remote Sensing CNN + Transformer Project
+# Kybelix ITU Space Computing Final Round
 
-This project builds a clean, reproducible Sentinel-2 `15x15` patch time-series dataset and a baseline CNN + Transformer model scaffold.
-
-The primary dataset is patch-based, not hand-engineered tabular features:
+This repository is now intentionally simple. It focuses on one training workflow:
 
 ```text
-patches: [N, T, 12, 15, 15]
+raw Sentinel-2 TIFFs + point labels -> 15x15 patch dataset -> audit -> CNN + Transformer
 ```
 
-## Main Notebook
+Submission/Docker files were removed for now because we first need to understand the data and the suspicious training results.
 
-Use this in Colab or locally:
+## What The PDFs Say
+
+`Space Intelligence Empowering Zero Hunger Track_Task Description of Final Round_en.pdf` defines the data and scoring:
+
+- Training labels are rows with `point_id`, `Longitude`, `Latitude`, `phenophase_date`, `crop_type`, `phenophase_name`.
+- The target is crop type plus phenophase stage for point-date rows.
+- Crop score uses macro-F1 over `corn`, `rice`, `soybean`.
+- Rice phenology score uses strict crop+stage exact matching for rice samples.
+
+`Round2 Project Submission Manual_en_0407.pdf` says the final platform is inference-only, but we are not focusing on submission files right now.
+
+## Important Finding
+
+The model looked too good because phenophase stage is almost predictable from date alone.
+
+Current audit result:
 
 ```text
-notebooks/project_pipeline.ipynb
+date-only rice stage accuracy: 1.0
+date-only all-crop stage accuracy: 0.934
 ```
 
-The notebook runs preprocessing, shows charts/samples, inspects tensors, and can start a 1-epoch model smoke test if PyTorch is installed.
+This means near-zero stage loss is not reliable evidence that the model learned phenology from image pixels. It is mostly learning calendar timing. This is not a code crash or train/val region overlap issue; it is a dataset/label-design issue.
 
-## Core Commands
+## Current Data
 
-Build the clean training dataset:
-
-```bash
-python3 scripts/preprocess_data.py --config configs/preprocessing.json
-```
-
-Train the baseline after preprocessing:
-
-```bash
-python3 scripts/train_baseline.py --config configs/train_baseline.json
-```
-
-Extract test patches in the final inference environment:
-
-```bash
-python3 scripts/extract_test_patches.py --input-root /input --output-npz /workspace/patches_clean_test/test_cnn_transformer_15x15.npz
-```
-
-Run prediction to `/output/result.json` after a model is trained:
-
-```bash
-python3 scripts/run_inference.py --checkpoint artifacts/models/cnn_transformer_baseline/model.pt --output-json /output/result.json
-```
-
-Important: the original guide/submission manual was removed from this workspace earlier. `inference/write_submission.py` writes a transparent generic JSON, but the exact competition schema must be confirmed before final upload.
-
-## Config Files
-
-```text
-configs/preprocessing.json
-configs/model_cnn_transformer.json
-configs/train_baseline.json
-```
-
-`configs/preprocessing.json` now actually controls:
-
-```text
-patch.size
-patch.bands
-patch.valid_min_exclusive
-patch.valid_max_inclusive
-patch.invalid_fill_value
-report.random_seed
-report.sample_bands
-report.sample_groups
-split.val_fraction
-split.stratify_by
-```
-
-## Raw Data Location
-
-Raw competition data is kept local in:
-
-```text
-downloadedRawData/
-```
-
-This folder is ignored by Git because it is about `70GB`. I did not edit raw TIFF contents; I only moved the raw folders and label CSV into `downloadedRawData/` and updated `configs/preprocessing.json` to point there.
-
-The compact training artifact is kept trackable for GitHub:
-
-```text
-artifacts/patches_clean/train_cnn_transformer_15x15.npz
-artifacts/normalization/train_patch_band_stats.json
-artifacts/splits/train_val_split.csv
-```
-
-## Produced Data
-
-Main dataset:
+Main artifact:
 
 ```text
 artifacts/patches_clean/train_cnn_transformer_15x15.npz
 ```
 
-Normalization stats:
-
-```text
-artifacts/normalization/train_patch_band_stats.json
-```
-
-Train/validation split:
-
-```text
-artifacts/splits/train_val_split.csv
-```
-
-Preprocessing report:
-
-```text
-artifacts/preprocessing_report/
-```
-
-## NPZ Schema
-
-The training NPZ contains:
+Main tensor:
 
 ```text
 patches: [N, T, 12, 15, 15]
-valid_pixel_mask: [N, T, 12, 15, 15]
-band_mask: [N, T, 12]
-time_mask: [N, T]
-time_doy: [N, T]
-time_dates: [N, T]
-border_margin_pixels: [N, T, 12]
-center_clamped: [N, T, 12]
-source_file_index: [N, T, 12]
-band_valid_ratio: [N, T, 12]
-point_id
-longitude
-latitude
-resolved_region_id
-crop_type_id
-crop_type_names
-phenophase_names
-phenophase_doy
-bands
-schema_version
 ```
 
-Invalid pixels are not silently trusted. Valid raw values are preserved, invalid positions are filled only in the tensor, and `valid_pixel_mask` records exactly where that happened.
-
-## Model Direction
-
-The baseline model is intentionally simple and modular:
+Meaning:
 
 ```text
-models/cnn_encoder.py          CNN per timestep over [12, 15, 15]
-models/temporal_transformer.py DOY encoding and masked temporal pooling
-models/cnn_transformer.py      CNN encoder + Transformer + crop/phenophase heads
-training/engine.py             multitask training loop
+N = sample point
+T = acquisition dates
+12 = Sentinel-2 bands
+15x15 = image patch
 ```
 
-The intended architecture is:
+The dataset also contains masks, dates, coordinates, crop labels, and phenophase DOY labels.
+
+Known current facts:
 
 ```text
-[T, 12, 15, 15] -> CNN timestep encoder -> temporal embeddings -> Transformer -> heads
+samples: 778
+patch shape: [778, 29, 12, 15, 15]
+valid pixel ratio: about 0.566
+valid-ratio-only crop macro-F1: about 0.319
+train/val point overlap: 0
+train/val region overlap: 0
 ```
 
-Masks are used so padded timesteps and invalid pixels are not treated as normal observations.
+## Simple Commands
 
-## Colab GPU Training
-
-Use the larger GPU-oriented config after cloning the repo. The compact NPZ artifact is configured to be trackable in GitHub:
+Build/rebuild the dataset:
 
 ```bash
-python3 scripts/train_baseline.py --config configs/train_colab_gpu.json
+python3 scripts/preprocess.py --config configs/preprocess.json
 ```
 
-This config uses a larger CNN + Transformer, mixed precision on CUDA, cosine LR schedule, warmup, gradient clipping, early stopping, and best-checkpoint saving. It keeps `num_workers` at `0` because the compact compressed NPZ is loaded into memory and multiprocessing workers can trigger zip/zlib read issues. If Colab runs out of memory, lower `batch_size` in `configs/train_colab_gpu.json` from `32` to `16` or `8`.
+Audit the dataset and leakage risks:
 
-## Latest Local Smoke Test
+```bash
+python3 scripts/audit.py
+```
 
-A local `.venv` was created with system site packages and PyTorch was installed inside it. The 1-epoch baseline smoke test completed on CPU and wrote:
+Train the CNN+Transformer with query date enabled:
+
+```bash
+python3 scripts/train.py --config configs/train.json
+```
+
+Run the important no-date ablation:
+
+```bash
+python3 scripts/train.py --config configs/train.json --no-query-date
+```
+
+If the no-date model performs much worse on rice stage, then the original stage result was calendar-driven.
+
+## Current File Structure
 
 ```text
-artifacts/models/cnn_transformer_baseline/model.pt
-artifacts/models/cnn_transformer_baseline/history.json
+configs/preprocess.json       one preprocessing config
+configs/train.json            one training config
+scripts/preprocess.py         builds the patch dataset
+scripts/audit.py              checks data, split, date-only baseline, leakage risks
+scripts/train.py              trains the single CNN+Transformer model
+preprocessing/                reusable TIFF/patch/mapping code
+data/query_dataset_npz.py     PyTorch dataset for point-date rows
+models/                       CNN encoder + temporal Transformer
+training/query_engine.py      training loop and metrics
+artifacts/                    compact data, splits, stats, generated model outputs
 ```
 
-This confirms the model code runs. Treat the 1-epoch metric as a pipeline check, not as final model quality. The default split is grouped by `resolved_region_id` to reduce spatial leakage.
+## How To Interpret Training
 
+Do not only look at loss.
 
-## Training Metric Fix
+Use these checks:
 
-The training log now reports `phenophase_mae_days`. This is more meaningful than only looking at normalized phenophase loss. Crop accuracy can still look very high, so compare `val_phenophase_mae_days` against the simple constant train-mean baseline from `scripts/audit_training_data.py`.
+1. Compare normal training with `--no-query-date`.
+2. Compare model stage metrics with `scripts/audit.py` date-only baseline.
+3. Watch crop macro-F1, not only crop accuracy.
+4. Remember that each point is expanded into 7 query rows, so crop examples are repeated 7 times.
+5. Treat the high invalid-pixel ratio as a risk; masks are preserved, but the current model does not explicitly consume mask channels.
 
+## Next Model Direction
 
-## PDF-Aligned Query Classifier
-
-After checking the final-round PDF, the correct prediction unit is a point-date query:
+Keep one main model for now:
 
 ```text
-"Longitude_Latitude_Date": ["CropType", "PhenophaseStage"]
+CNN encoder per date -> Transformer over time -> crop head + stage head
 ```
 
-So the old date-regression baseline is not the final task model. Added a corrected query classifier:
+Only add LSTM/RNN or other models after the audit proves whether the current issue is data/date leakage or model behavior.
+
+
+## 1-epoch smoke test
+
+Normal model with query date, CPU smoke run:
 
 ```text
-data/query_dataset_npz.py
-models/query_cnn_transformer.py
-training/query_engine.py
-scripts/train_query_classifier.py
-configs/model_query_cnn_transformer.json
-configs/train_query_colab_gpu.json
+val_crop_macro_f1: 0.999
+val_rice_stage_macro_f1: 0.120
 ```
 
-Use this for real training:
+No-date ablation, CPU smoke run:
 
-```bash
-python3 scripts/train_query_classifier.py --config configs/train_query_colab_gpu.json
+```text
+val_crop_macro_f1: 0.995
+val_rice_stage_macro_f1: 0.090
 ```
 
-Local CPU smoke test completed for 1 epoch, but local PyTorch does not see Apple MPS in this environment, so full training should be run on Colab GPU.
-
-## Final-Round PDF Correction
-
-The final platform is inference-only. It provides `/input/test_point.csv` or `/input/points_test.csv` and `/input/region_test/*.tiff`; the code must write `/output/result.json`.
-
-Use the PDF-aligned inference entry point after a trained query checkpoint exists:
-
-```bash
-./run.sh
-```
-
-or directly:
-
-```bash
-python3 scripts/run_query_inference.py \
-  --input-root /input \
-  --checkpoint artifacts/models/query_cnn_transformer_colab/model.pt \
-  --normalization-json artifacts/normalization/train_patch_band_stats.json \
-  --output-json /output/result.json
-```
-
-Important validation note: the current validation split is not reliable for proving image-based phenology learning. A date-only baseline predicts rice phenophase stage perfectly on this split, so the high rice-stage validation score is mostly a calendar effect. To test whether imagery adds value for stage prediction, run the no-date ablation:
-
-```bash
-python3 scripts/train_query_classifier.py --config configs/train_query_colab_gpu_no_date.json
-```
-
-The crop model is still image-dependent; the date-only audit only explains the suspicious phenophase-stage result.
+Interpretation: after only 1 epoch, crop is already very easy for the CNN+Transformer, while stage is still poor. The previous very high stage score after many epochs should be compared against the date-only baseline before trusting it.

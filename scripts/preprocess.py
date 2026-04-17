@@ -32,7 +32,7 @@ def load_config(path: Path) -> dict[str, Any]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build clean 15x15 Sentinel-2 patch dataset plus logs/charts.")
-    parser.add_argument("--config", type=Path, default=ROOT / "configs" / "preprocessing.json")
+    parser.add_argument("--config", type=Path, default=ROOT / "configs" / "preprocess.json")
     parser.add_argument("--keep-old-report", action="store_true", help="Do not clear the previous report folder before running.")
     return parser.parse_args()
 
