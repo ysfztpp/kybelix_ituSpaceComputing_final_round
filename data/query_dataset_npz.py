@@ -31,6 +31,7 @@ class QueryDatePatchDataset(Dataset):
         normalization_json: Path | None = None,
         normalization_method: str = "zscore",
         rice_stage_loss_only: bool = True,
+        shuffle_labels_seed: int | None = None,
     ) -> None:
         if torch is None:
             raise ImportError("torch is required for QueryDatePatchDataset. Install PyTorch before training.")
@@ -56,6 +57,22 @@ class QueryDatePatchDataset(Dataset):
                     continue
                 stage_weight = 1.0 if (not self.rice_stage_loss_only or crop_id == rice_id) else 0.0
                 rows.append((int(sample_index), int(stage_index), int(doy), crop_id, float(stage_weight)))
+        if shuffle_labels_seed is not None:
+            rng = np.random.default_rng(int(shuffle_labels_seed))
+            crop_labels = np.asarray([row[3] for row in rows], dtype=np.int16)
+            stage_labels = np.asarray([row[1] for row in rows], dtype=np.int16)
+            rng.shuffle(crop_labels)
+            rng.shuffle(stage_labels)
+            rows = [
+                (
+                    sample_index,
+                    int(stage_labels[row_index]),
+                    query_doy,
+                    int(crop_labels[row_index]),
+                    1.0 if (not self.rice_stage_loss_only or int(crop_labels[row_index]) == rice_id) else 0.0,
+                )
+                for row_index, (sample_index, _stage_index, query_doy, _crop_id, _stage_weight) in enumerate(rows)
+            ]
         self.rows = rows
 
     def _rice_class_id(self) -> int:

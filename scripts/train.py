@@ -77,6 +77,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=ROOT / "configs" / "train.json")
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--no-query-date", action="store_true", help="Ablation: remove query date from the model to test calendar leakage.")
+    parser.add_argument("--no-time-date", action="store_true", help="Ablation: remove acquisition-date encoding from the temporal Transformer.")
+    parser.add_argument("--shuffle-labels", action="store_true", help="Sanity check: shuffle train labels only; validation should collapse toward random.")
     return parser.parse_args()
 
 
@@ -90,6 +92,11 @@ def main() -> None:
     if args.no_query_date:
         model_config_data["use_query_doy"] = False
         config["output_dir"] = str(config.get("output_dir", "artifacts/models/cnn_transformer")) + "_no_date"
+    if args.no_time_date:
+        model_config_data["use_time_doy"] = False
+        config["output_dir"] = str(config.get("output_dir", "artifacts/models/cnn_transformer")) + "_no_time_date"
+    if args.shuffle_labels:
+        config["output_dir"] = str(config.get("output_dir", "artifacts/models/cnn_transformer")) + "_shuffled_labels"
     model_config = QueryCNNTransformerConfig(**{key: value for key, value in model_config_data.items() if key in QueryCNNTransformerConfig.__annotations__})
 
     train_ds = QueryDatePatchDataset(
@@ -98,6 +105,7 @@ def main() -> None:
         split="train",
         normalization_json=resolve_path(config["normalization_json"]),
         rice_stage_loss_only=bool(config.get("rice_stage_loss_only", True)),
+        shuffle_labels_seed=int(config.get("seed", 42)) if args.shuffle_labels else None,
     )
     val_ds = QueryDatePatchDataset(
         npz_path=resolve_path(config["dataset_npz"]),

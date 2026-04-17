@@ -178,3 +178,35 @@ val_rice_stage_macro_f1: 0.090
 ```
 
 Interpretation: after only 1 epoch, crop is already very easy for the CNN+Transformer, while stage is still poor. The previous very high stage score after many epochs should be compared against the date-only baseline before trusting it.
+
+## Fast Date/Leakage Tests
+
+Added fast experiment controls:
+
+```text
+configs/train_fast.json
+scripts/run_fast_checks.py
+scripts/train.py --no-query-date
+scripts/train.py --no-time-date
+scripts/train.py --shuffle-labels
+```
+
+One-epoch CPU fast-model results:
+
+```text
+normal_dates val_crop_macro_f1: 0.995
+normal_dates val_rice_stage_macro_f1: 0.410
+no_query_date val_crop_macro_f1: 0.995
+no_query_date val_rice_stage_macro_f1: 0.064
+no_query_or_time_date val_crop_macro_f1: 0.989
+no_query_or_time_date val_rice_stage_macro_f1: 0.042
+shuffled_train_labels val_crop_macro_f1: 0.120
+```
+
+Interpretation:
+
+```text
+The query date strongly drives phenophase-stage prediction.
+Crop prediction remains high even without query/acquisition date encoding, so crop seems mostly image-based.
+When train labels are shuffled, validation crop macro-F1 collapses to majority-class behavior, so there is no obvious label leakage through the code path.
+```

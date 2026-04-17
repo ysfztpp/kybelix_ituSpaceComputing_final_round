@@ -24,6 +24,7 @@ class QueryCNNTransformerConfig:
     num_crop_classes: int = 3
     num_phenophase_classes: int = 7
     use_query_doy: bool = True
+    use_time_doy: bool = True
 
 
 class QueryCNNTransformerClassifier(nn.Module):
@@ -55,7 +56,9 @@ class QueryCNNTransformerClassifier(nn.Module):
         batch_size, timesteps, bands, height, width = patches.shape
         flat = patches.reshape(batch_size * timesteps, bands, height, width)
         encoded = self.cnn(flat).reshape(batch_size, timesteps, -1)
-        x = self.input_proj(encoded) + self.time_encoding(time_doy)
+        x = self.input_proj(encoded)
+        if self.config.use_time_doy:
+            x = x + self.time_encoding(time_doy)
         x = self.transformer(x, src_key_padding_mask=~time_mask.bool())
         pooled = self.pool(x, time_mask.bool())
         if self.config.use_query_doy:
