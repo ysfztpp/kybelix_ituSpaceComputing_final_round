@@ -1,0 +1,13 @@
+.git
+.venv
+__pycache__/
+*.pyc
+.DS_Store
+*.tiff
+*.tar
+*.tar.gz
+downloadedRawData/
+region_train_*/
+artifacts/**
+!artifacts/normalization/
+!artifacts/normalization/**
