@@ -137,7 +137,13 @@ mkdir -p checkpoints
 cp artifacts/models/submission_cnn_transformer_no_query_date/model.pt checkpoints/model.pt
 ```
 
-Then commit and push the checkpoint on this branch.
+Validate before pushing:
+
+```bash
+python3 scripts/validate_submission.py
+```
+
+Then commit and push the checkpoint on your submission-test branch.
 
 ## Local Format Smoke Test
 
