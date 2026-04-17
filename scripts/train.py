@@ -49,15 +49,18 @@ def build_scheduler(config: dict[str, Any], optimizer: torch.optim.Optimizer, ep
 
     warmup_epochs = max(0, int(config.get("warmup_epochs", 0)))
     base_lr = float(config["learning_rate"])
+    min_lr = max(0.0, float(config.get("min_lr", 0.0)))
+    min_lr_factor = min(min_lr / base_lr, 1.0) if base_lr > 0 else 0.0
 
     def lr_lambda(epoch_index: int) -> float:
         # LambdaLR uses zero-based epoch index after each scheduler.step().
         epoch_number = epoch_index + 1
         if warmup_epochs and epoch_number <= warmup_epochs:
-            return max(epoch_number / warmup_epochs, 1e-8)
+            return max(epoch_number / warmup_epochs, min_lr_factor, 1e-8)
         decay_epochs = max(1, epochs - warmup_epochs)
         progress = min(max((epoch_number - warmup_epochs) / decay_epochs, 0.0), 1.0)
-        return 0.5 * (1.0 + math.cos(math.pi * progress))
+        cosine_factor = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min_lr_factor + (1.0 - min_lr_factor) * cosine_factor
 
     for group in optimizer.param_groups:
         group["lr"] = base_lr
@@ -149,6 +152,8 @@ def main() -> None:
         early_stopping_patience=config.get("early_stopping_patience"),
         save_best_only=bool(config.get("save_best_only", True)),
         checkpoint_payload=payload,
+        checkpoint_metric=str(config.get("checkpoint_metric", "val_loss")),
+        tie_breaker_metric=str(config.get("tie_breaker_metric", "val_loss")),
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "history.json").write_text(json.dumps(history, indent=2))

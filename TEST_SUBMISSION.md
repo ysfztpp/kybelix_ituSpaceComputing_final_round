@@ -76,6 +76,25 @@ configs/train_submission_no_query_date.json
 
 Use the first one for the likely best competition score. Use the second one to test the date shortcut.
 
+## Checkpoint And LR Behavior
+
+Training saves `model.pt` from the best validation checkpoint, not blindly the last epoch, when:
+
+```json
+"save_best_only": true
+```
+
+For the submission configs the checkpoint selector is:
+
+```json
+"checkpoint_metric": "val_competition_score",
+"tie_breaker_metric": "val_loss"
+```
+
+So the saved model is the best validation competition-score checkpoint. If several epochs have the same score, the lower validation loss wins.
+
+The printed `lr` is the learning rate used for that epoch. Warmup starts below the configured `learning_rate`, then cosine decay reduces it down to `min_lr`.
+
 ## Colab Training Commands
 
 Clone and switch branch:

@@ -133,31 +133,69 @@ def fit_query(
     early_stopping_patience: int | None = None,
     save_best_only: bool = True,
     checkpoint_payload: dict[str, Any] | None = None,
+    checkpoint_metric: str = "val_loss",
+    tie_breaker_metric: str = "val_loss",
 ) -> list[dict[str, Any]]:
     history: list[dict[str, Any]] = []
-    best_val_loss = float("inf")
+    maximize_checkpoint_metric = "loss" not in checkpoint_metric.lower()
+    best_metric = float("-inf") if maximize_checkpoint_metric else float("inf")
+    best_tie_breaker = float("inf")
+    best_epoch = 0
+    best_val_loss_seen = float("inf")
     stale_epochs = 0
     scaler = torch.amp.GradScaler("cuda", enabled=amp and device.type == "cuda")
     for epoch in range(1, epochs + 1):
+        # Log the learning rate actually used during this epoch. The scheduler is
+        # stepped at the end so the printed value is not accidentally one epoch ahead.
+        lr_used = float(optimizer.param_groups[0]["lr"])
         train_metrics = run_query_epoch(model, train_loader, optimizer, device, True, stage_loss_weight, amp, scaler, gradient_accumulation_steps, clip_grad_norm)
         val_metrics = run_query_epoch(model, val_loader, optimizer, device, False, stage_loss_weight, False, None, 1, clip_grad_norm)
-        if scheduler is not None:
-            scheduler.step()
-        row = {"epoch": epoch, "lr": float(optimizer.param_groups[0]["lr"]), **{f"train_{k}": v for k, v in train_metrics.items()}, **{f"val_{k}": v for k, v in val_metrics.items()}}
+        row = {"epoch": epoch, "lr": lr_used, **{f"train_{k}": v for k, v in train_metrics.items()}, **{f"val_{k}": v for k, v in val_metrics.items()}}
+        for prefix in ("train", "val"):
+            row[f"{prefix}_competition_score"] = 0.4 * row[f"{prefix}_crop_macro_f1"] + 0.6 * row[f"{prefix}_rice_stage_macro_f1"]
         history.append(row)
         print(row)
-        improved = row["val_loss"] < best_val_loss
+
+        if checkpoint_metric not in row:
+            raise KeyError(f"checkpoint_metric '{checkpoint_metric}' is not available. Available metrics: {sorted(row)}")
+        if tie_breaker_metric not in row:
+            raise KeyError(f"tie_breaker_metric '{tie_breaker_metric}' is not available. Available metrics: {sorted(row)}")
+
+        best_val_loss_seen = min(best_val_loss_seen, row["val_loss"])
+        metric_value = float(row[checkpoint_metric])
+        tie_value = float(row[tie_breaker_metric])
+        epsilon = 1e-12
+        if maximize_checkpoint_metric:
+            improved = metric_value > best_metric + epsilon or (abs(metric_value - best_metric) <= epsilon and tie_value < best_tie_breaker)
+        else:
+            improved = metric_value < best_metric - epsilon or (abs(metric_value - best_metric) <= epsilon and tie_value < best_tie_breaker)
         if improved:
-            best_val_loss = row["val_loss"]
+            best_metric = metric_value
+            best_tie_breaker = tie_value
+            best_epoch = epoch
             stale_epochs = 0
         else:
             stale_epochs += 1
         if output_dir is not None and (improved or not save_best_only):
             output_dir.mkdir(parents=True, exist_ok=True)
             payload = dict(checkpoint_payload or {})
-            payload.update({"model_state_dict": model.state_dict(), "epoch": epoch, "best_val_loss": best_val_loss, "history": history})
+            payload.update(
+                {
+                    "model_state_dict": model.state_dict(),
+                    "epoch": epoch,
+                    "checkpoint_metric": checkpoint_metric,
+                    "best_metric_value": best_metric,
+                    "best_epoch": best_epoch,
+                    "tie_breaker_metric": tie_breaker_metric,
+                    "best_tie_breaker_value": best_tie_breaker,
+                    "best_val_loss": best_val_loss_seen,
+                    "history": history,
+                }
+            )
             torch.save(payload, output_dir / "model.pt")
         if early_stopping_patience is not None and stale_epochs >= early_stopping_patience:
-            print({"early_stopped_epoch": epoch, "best_val_loss": best_val_loss})
+            print({"early_stopped_epoch": epoch, "checkpoint_metric": checkpoint_metric, "best_metric_value": best_metric, "best_epoch": best_epoch})
             break
+        if scheduler is not None:
+            scheduler.step()
     return history

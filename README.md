@@ -138,6 +138,14 @@ Use these checks:
 4. Remember that each point is expanded into 7 query rows, so crop examples are repeated 7 times.
 5. Do not confuse padded timesteps with invalid observed pixels. The observed invalid-pixel ratio is about 7.68%; the lower 0.566 array ratio only happens if padded timesteps are counted as invalid.
 
+Checkpoint behavior:
+
+```text
+save_best_only=true saves the best validation checkpoint, not necessarily the last epoch.
+training/query_engine.py logs the learning rate actually used during each epoch.
+submission configs can select by val_competition_score and break ties with val_loss.
+```
+
 ## Next Model Direction
 
 Keep one main model for now:

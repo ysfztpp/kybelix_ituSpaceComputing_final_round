@@ -32,5 +32,8 @@
     "use_query_doy": true,
     "use_time_doy": true
   },
-  "include_valid_mask_as_channels": true
+  "include_valid_mask_as_channels": true,
+  "checkpoint_metric": "val_competition_score",
+  "tie_breaker_metric": "val_loss",
+  "min_lr": 1e-06
 }
