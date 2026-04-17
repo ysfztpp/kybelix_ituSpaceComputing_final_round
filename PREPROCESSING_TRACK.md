@@ -47,8 +47,8 @@ Current dataset:
 ```text
 samples: 778
 patch shape: [778, 29, 12, 15, 15]
-valid pixel ratio: about 0.566
-valid-ratio-only crop macro-F1: about 0.319
+observed valid pixel ratio, excluding padded timesteps: about 0.923
+valid-ratio-only crop macro-F1: about 0.370
 train samples: 609
 val samples: 169
 train/val point overlap: 0
@@ -74,7 +74,7 @@ Other risks:
 ```text
 Each point becomes 7 query rows, so crop labels are repeated 7 times.
 The dataset is small for a 3M-parameter model.
-The valid pixel ratio is low, so missingness may become a shortcut.
+The observed invalid-pixel ratio is about 7.68%. Most invalid observed pixels come from complete zero/nodata band-patches, while padded timesteps are separate and should not be counted as invalid observed pixels.
 ```
 
 ## Files Kept
@@ -110,6 +110,21 @@ Reason:
 ```text
 The project was too hard to reason about. We need one clean training path before returning to final submission packaging.
 ```
+
+
+Important mask clarification:
+
+```text
+observed valid pixel ratio excluding padding: 0.923
+observed invalid pixel ratio excluding padding: 0.0768
+all-array valid ratio including padded timesteps: 0.566
+padding pixel ratio of NPZ array: 0.3865
+full-invalid observed band-patches: 12,564
+perfect observed band-patches: 152,902
+partial-invalid observed band-patches: 631
+```
+
+The `0.566` number is not the real invalid-pixel rate. It counts padded timesteps as invalid. Use the observed-only ratio from `scripts/audit.py`.
 
 ## Commands
 

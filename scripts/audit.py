@@ -89,8 +89,15 @@ def constant_doy_mae(data: dict[str, np.ndarray], split: pd.DataFrame) -> dict[s
     }
 
 
+def observed_valid_ratio_per_sample(data: dict[str, np.ndarray]) -> np.ndarray:
+    patch_size = int(data["patch_size"])
+    observed_pixels = data["band_mask"].sum(axis=(1, 2)) * patch_size * patch_size
+    valid_pixels = data["valid_pixel_mask"].sum(axis=(1, 2, 3, 4))
+    return np.divide(valid_pixels, np.maximum(observed_pixels, 1))
+
+
 def valid_ratio_crop_baseline(data: dict[str, np.ndarray], split: pd.DataFrame) -> dict[str, Any]:
-    valid_ratio = data["valid_pixel_mask"].mean(axis=(1, 2, 3, 4))
+    valid_ratio = observed_valid_ratio_per_sample(data)
     crop_id = data["crop_type_id"].astype(int)
     train_idx = split.loc[split["split"] == "train", "sample_index"].to_numpy(dtype=int)
     val_idx = split.loc[split["split"] == "val", "sample_index"].to_numpy(dtype=int)
@@ -118,6 +125,16 @@ def main() -> None:
         data = {name: npz[name] for name in npz.files}
     split = pd.read_csv(resolve_path(args.split_csv))
     rows = query_rows(data, split)
+    patch_size = int(data["patch_size"])
+    observed_band_cells = int(data["band_mask"].sum())
+    observed_pixels = int(observed_band_cells * patch_size * patch_size)
+    valid_pixels = int(data["valid_pixel_mask"].sum())
+    total_array_pixels = int(data["valid_pixel_mask"].size)
+    padded_pixels = int(total_array_pixels - observed_pixels)
+    observed_valid_ratio = valid_pixels / max(observed_pixels, 1)
+    all_array_valid_ratio = valid_pixels / max(total_array_pixels, 1)
+    per_sample_valid_ratio = observed_valid_ratio_per_sample(data)
+    observed_band_valid_ratios = data["band_valid_ratio"][data["band_mask"]]
 
     train = split[split["split"] == "train"]
     val = split[split["split"] == "val"]
@@ -125,8 +142,8 @@ def main() -> None:
     date_baseline = date_only_stage_baseline(rows, len(data["phenophase_names"]))
     if date_baseline["date_only_rice_stage_accuracy"] >= 0.95:
         warnings.append("Rice stage is almost fully predictable from query date on this split; do not interpret near-zero stage loss as image-based phenology learning.")
-    if float(data["valid_pixel_mask"].mean()) < 0.75:
-        warnings.append("More than 25% of patch pixels are invalid; missingness may become a shortcut unless monitored.")
+    if observed_valid_ratio < 0.90:
+        warnings.append("More than 10% of observed patch pixels are invalid; missingness may become a shortcut unless monitored.")
     if len(set(train["resolved_region_id"]) & set(val["resolved_region_id"])) == 0:
         warnings.append("No train/val region overlap was found; the suspicious stage result is not from region overlap.")
 
@@ -134,7 +151,14 @@ def main() -> None:
         "dataset_npz": str(resolve_path(args.dataset_npz)),
         "patches_shape": list(data["patches"].shape),
         "patch_value_dtype": str(data["patches"].dtype),
-        "valid_pixel_ratio": float(data["valid_pixel_mask"].mean()),
+        "observed_valid_pixel_ratio_excluding_padding": float(observed_valid_ratio),
+        "observed_invalid_pixel_ratio_excluding_padding": float(1.0 - observed_valid_ratio),
+        "all_array_valid_ratio_including_padding": float(all_array_valid_ratio),
+        "padding_pixel_ratio_of_array": float(padded_pixels / max(total_array_pixels, 1)),
+        "observed_band_cells": observed_band_cells,
+        "observed_pixels": observed_pixels,
+        "valid_pixels": valid_pixels,
+        "invalid_observed_pixels": int(observed_pixels - valid_pixels),
         "time_steps_min": int(data["time_mask"].sum(axis=1).min()),
         "time_steps_max": int(data["time_mask"].sum(axis=1).max()),
         "sample_count": int(data["patches"].shape[0]),
@@ -147,7 +171,20 @@ def main() -> None:
         "train_val_point_overlap": int(len(set(train["point_id"]) & set(val["point_id"]))),
         "train_val_region_overlap": int(len(set(train["resolved_region_id"]) & set(val["resolved_region_id"]))),
         "class_counts_by_split": pd.crosstab(split["split"], split["crop_type"]).to_dict(),
-        "valid_pixel_ratio_by_crop": split.assign(valid_ratio=data["valid_pixel_mask"].mean(axis=(1, 2, 3, 4))).groupby(["split", "crop_type"])["valid_ratio"].mean().unstack(0).to_dict(),
+        "observed_valid_pixel_ratio_by_crop": split.assign(valid_ratio=per_sample_valid_ratio).groupby(["split", "crop_type"])["valid_ratio"].mean().unstack(0).to_dict(),
+        "observed_band_patch_valid_ratio_distribution": {
+            "full_invalid_band_patches": int((observed_band_valid_ratios == 0).sum()),
+            "perfect_band_patches": int((observed_band_valid_ratios == 1).sum()),
+            "partial_invalid_band_patches": int(((observed_band_valid_ratios > 0) & (observed_band_valid_ratios < 1)).sum()),
+        },
+        "sample_valid_ratio_distribution": {
+            "min": float(per_sample_valid_ratio.min()),
+            "median": float(np.median(per_sample_valid_ratio)),
+            "mean": float(per_sample_valid_ratio.mean()),
+            "samples_below_0_99": int((per_sample_valid_ratio < 0.99).sum()),
+            "samples_below_0_95": int((per_sample_valid_ratio < 0.95).sum()),
+            "samples_below_0_90": int((per_sample_valid_ratio < 0.90).sum()),
+        },
         "date_only_stage_baseline": date_baseline,
         "constant_doy_regression_baseline": constant_doy_mae(data, split),
         "valid_ratio_only_crop_baseline": valid_ratio_crop_baseline(data, split),
@@ -155,6 +192,8 @@ def main() -> None:
         "interpretation": [
             "Crop labels are repeated across seven query rows per point, so crop metrics should be interpreted at point level, not as seven independent examples.",
             "Stage labels are built from the same phenophase dates used as query dates; this is why date-only stage prediction is extremely strong.",
+            "Do not use all_array_valid_ratio_including_padding as a data-quality metric; padded timesteps are intentionally false in the mask.",
+            "Most observed invalid pixels come from complete zero/nodata band patches, not from random single-pixel corruption.",
             "The current dataset is small enough for a 3M-parameter CNN+Transformer to memorize. Use no-date ablation and simpler baselines before claiming generalization.",
         ],
     }

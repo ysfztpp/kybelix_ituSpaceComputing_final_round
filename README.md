@@ -62,8 +62,8 @@ Known current facts:
 ```text
 samples: 778
 patch shape: [778, 29, 12, 15, 15]
-valid pixel ratio: about 0.566
-valid-ratio-only crop macro-F1: about 0.319
+observed valid pixel ratio, excluding padded timesteps: about 0.923
+valid-ratio-only crop macro-F1: about 0.370
 train/val point overlap: 0
 train/val region overlap: 0
 ```
@@ -111,6 +111,21 @@ training/query_engine.py      training loop and metrics
 artifacts/                    compact data, splits, stats, generated model outputs
 ```
 
+
+Important mask clarification:
+
+```text
+observed valid pixel ratio excluding padding: 0.923
+observed invalid pixel ratio excluding padding: 0.0768
+all-array valid ratio including padded timesteps: 0.566
+padding pixel ratio of NPZ array: 0.3865
+full-invalid observed band-patches: 12,564
+perfect observed band-patches: 152,902
+partial-invalid observed band-patches: 631
+```
+
+The `0.566` number is not the real invalid-pixel rate. It counts padded timesteps as invalid. Use the observed-only ratio from `scripts/audit.py`.
+
 ## How To Interpret Training
 
 Do not only look at loss.
@@ -121,7 +136,7 @@ Use these checks:
 2. Compare model stage metrics with `scripts/audit.py` date-only baseline.
 3. Watch crop macro-F1, not only crop accuracy.
 4. Remember that each point is expanded into 7 query rows, so crop examples are repeated 7 times.
-5. Treat the high invalid-pixel ratio as a risk; masks are preserved, but the current model does not explicitly consume mask channels.
+5. Do not confuse padded timesteps with invalid observed pixels. The observed invalid-pixel ratio is about 7.68%; the lower 0.566 array ratio only happens if padded timesteps are counted as invalid.
 
 ## Next Model Direction
 
