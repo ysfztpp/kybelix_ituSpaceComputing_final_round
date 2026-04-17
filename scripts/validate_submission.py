@@ -43,8 +43,8 @@ def main() -> None:
         fail(f"submission config missing keys: {missing_keys}")
 
     output_json = Path(config["output_json"])
-    if str(output_json) != "/output/result.json":
-        fail(f"Track 1 output must be /output/result.json, got {output_json}")
+    if not output_json.is_absolute() or output_json.name != "result.json":
+        fail(f"Track 1 output must be an absolute path ending with result.json, got {output_json}")
 
     checkpoint = resolve_path(config["checkpoint"])
     if not checkpoint.exists():

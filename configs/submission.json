@@ -3,7 +3,7 @@
   "output_json": "/output/result.json",
   "checkpoint": "checkpoints/model.pt",
   "normalization_json": "artifacts/normalization/train_patch_band_stats.json",
-  "work_dir": "/workspace/submission_work",
+  "work_dir": "/tmp/kybelix_submission_work",
   "batch_size": 64,
   "device": "auto",
   "preprocessing": {
