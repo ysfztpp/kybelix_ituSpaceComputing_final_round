@@ -13,7 +13,6 @@ from .filename import doy_from_timestamp
 from .inventory import audit_tiff_files, build_region_catalog, select_file_index
 from .mapping import map_points_to_regions, unique_points
 from .raster_io import clean_patch_values, extract_patch_edge_from_src, raster_meta_from_src, rasterio
-from .reporting import write_preprocessing_report
 
 
 def _json_default(value: Any) -> Any:
@@ -511,6 +510,8 @@ def build_patch_dataset(
         "report_random_seed": int(report_random_seed),
     }
     if write_reports:
+        from .reporting import write_preprocessing_report
+
         (output_dir / "dataset_report.json").write_text(json.dumps(report, indent=2, default=_json_default))
         sample_rows_df = _sample_records_to_rows(reservoirs, patch_size)
         write_preprocessing_report(output_dir, report, metadata, sample_rows_df)
