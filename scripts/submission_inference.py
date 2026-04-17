@@ -111,15 +111,43 @@ def prepare_patches(arrays: dict[str, np.ndarray], indices: np.ndarray, normaliz
     return patches.astype(np.float32, copy=False)
 
 
-def write_result(query_rows: pd.DataFrame, crop_pred: np.ndarray, stage_pred: np.ndarray, output_json: Path) -> None:
+def _count_names(values: np.ndarray, names: list[str]) -> dict[str, int]:
+    counts = {name: 0 for name in names}
+    for value in values:
+        counts[names[int(value)]] += 1
+    return counts
+
+
+def write_result(query_rows: pd.DataFrame, crop_pred: np.ndarray, stage_pred: np.ndarray, output_json: Path) -> dict[str, Any]:
     result: dict[str, list[str]] = {}
+    duplicate_rows = 0
+    duplicate_conflicts = 0
+    duplicate_examples: list[dict[str, Any]] = []
     for i, row in query_rows.reset_index(drop=True).iterrows():
         crop = CROP_TYPE_NAMES[int(crop_pred[i])]
         stage = PHENOPHASE_NAMES[int(stage_pred[i])]
         key = f"{row['longitude_key']}_{row['latitude_key']}_{row['date_key']}"
-        result[key] = [crop, stage]
+        value = [crop, stage]
+        if key in result:
+            duplicate_rows += 1
+            if result[key] != value:
+                duplicate_conflicts += 1
+                if len(duplicate_examples) < 5:
+                    duplicate_examples.append({"key": key, "kept": result[key], "ignored": value})
+            # JSON cannot contain duplicate keys. Keep the first deterministic value.
+            continue
+        result[key] = value
     output_json.parent.mkdir(parents=True, exist_ok=True)
     output_json.write_text(json.dumps(result, indent=2, ensure_ascii=False))
+    return {
+        "query_rows": int(len(query_rows)),
+        "unique_output_keys": int(len(result)),
+        "duplicate_output_key_rows": int(duplicate_rows),
+        "duplicate_output_key_conflicts": int(duplicate_conflicts),
+        "duplicate_output_key_examples": duplicate_examples,
+        "crop_prediction_counts": _count_names(crop_pred, CROP_TYPE_NAMES),
+        "stage_prediction_counts": _count_names(stage_pred, PHENOPHASE_NAMES),
+    }
 
 
 def run_inference(config: dict[str, Any]) -> dict[str, Any]:
@@ -178,8 +206,22 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
 
     crop_pred = np.concatenate(crop_chunks)
     stage_pred = np.concatenate(stage_chunks)
-    write_result(query_rows, crop_pred, stage_pred, output_json)
-    return {"output_json": str(output_json), "queries": int(len(query_rows)), "device": str(device), "patch_report": report}
+    result_stats = write_result(query_rows, crop_pred, stage_pred, output_json)
+    return {
+        "output_json": str(output_json),
+        "queries": int(len(query_rows)),
+        "unique_output_keys": result_stats["unique_output_keys"],
+        "duplicate_output_key_rows": result_stats["duplicate_output_key_rows"],
+        "duplicate_output_key_conflicts": result_stats["duplicate_output_key_conflicts"],
+        "device": str(device),
+        "torch_version": torch.__version__,
+        "torch_cuda_available": bool(torch.cuda.is_available()),
+        "torch_cuda_device_count": int(torch.cuda.device_count()) if torch.cuda.is_available() else 0,
+        "torch_cuda_device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "model_uses_mask_channels": bool(include_mask_channels),
+        "result_stats": result_stats,
+        "patch_report": report,
+    }
 
 
 def main() -> None:

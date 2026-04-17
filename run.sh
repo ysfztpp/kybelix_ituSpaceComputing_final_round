@@ -9,6 +9,18 @@ if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
 fi
 echo "[submission] Python executable: ${PYTHON_BIN}"
 echo "[submission] Python version: $(${PYTHON_BIN} --version 2>&1)"
+${PYTHON_BIN} - <<'PY'
+try:
+    import torch
+
+    print(f"[submission] torch version: {torch.__version__}")
+    print(f"[submission] torch cuda available: {torch.cuda.is_available()}")
+    print(f"[submission] torch cuda device count: {torch.cuda.device_count()}")
+    if torch.cuda.is_available():
+        print(f"[submission] torch cuda device 0: {torch.cuda.get_device_name(0)}")
+except Exception as exc:
+    print(f"[submission] torch import check failed: {exc}")
+PY
 SUBMISSION_INPUT_ROOT="${INPUT_ROOT:-/input}"
 SUBMISSION_OUTPUT_DIR="${OUTPUT_DIR:-/output}"
 SUBMISSION_OUTPUT_JSON="${SUBMISSION_OUTPUT_DIR}/result.json"
