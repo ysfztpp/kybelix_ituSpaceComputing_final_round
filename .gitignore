@@ -14,6 +14,7 @@ Guide to the Second Round_track1/
 artifacts/models/
 artifacts/preprocessing_report/
 artifacts/audit/
+artifacts/features/
 
 # Ignore generated arrays by default, but allow the final compact training dataset.
 artifacts/**/*.npy

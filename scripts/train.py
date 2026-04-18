@@ -90,17 +90,20 @@ def main() -> None:
     config = json.loads(resolve_path(args.config).read_text())
     seed_everything(int(config.get("seed", 42)))
     device = select_device(str(config.get("device", "auto")))
+    preserve_output_dir = bool(config.get("preserve_output_dir", False))
 
     model_config_data = dict(config.get("model", {}))
     if args.no_query_date:
         model_config_data["use_query_doy"] = False
-        config["output_dir"] = str(config.get("output_dir", "artifacts/models/cnn_transformer")) + "_no_date"
+        if not preserve_output_dir:
+            config["output_dir"] = str(config.get("output_dir", "artifacts/models/cnn_transformer")) + "_no_date"
     if args.no_time_date:
         model_config_data["use_time_doy"] = False
-        config["output_dir"] = str(config.get("output_dir", "artifacts/models/cnn_transformer")) + "_no_time_date"
-    if args.shuffle_labels:
+        if not preserve_output_dir:
+            config["output_dir"] = str(config.get("output_dir", "artifacts/models/cnn_transformer")) + "_no_time_date"
+    if args.shuffle_labels and not preserve_output_dir:
         config["output_dir"] = str(config.get("output_dir", "artifacts/models/cnn_transformer")) + "_shuffled_labels"
-    model_config = QueryCNNTransformerConfig(**{key: value for key, value in model_config_data.items() if key in QueryCNNTransformerConfig.__annotations__})
+    use_aux_features = bool(config.get("use_aux_features", False))
 
     train_ds = QueryDatePatchDataset(
         npz_path=resolve_path(config["dataset_npz"]),
@@ -110,6 +113,7 @@ def main() -> None:
         rice_stage_loss_only=bool(config.get("rice_stage_loss_only", True)),
         shuffle_labels_seed=int(config.get("seed", 42)) if args.shuffle_labels else None,
         include_valid_mask_as_channels=bool(config.get("include_valid_mask_as_channels", False)),
+        use_aux_features=use_aux_features,
     )
     val_ds = QueryDatePatchDataset(
         npz_path=resolve_path(config["dataset_npz"]),
@@ -118,7 +122,13 @@ def main() -> None:
         normalization_json=resolve_path(config["normalization_json"]),
         rice_stage_loss_only=bool(config.get("rice_stage_loss_only", True)),
         include_valid_mask_as_channels=bool(config.get("include_valid_mask_as_channels", False)),
+        use_aux_features=use_aux_features,
     )
+    if use_aux_features:
+        model_config_data["aux_feature_dim"] = int(train_ds.aux_feature_dim)
+    else:
+        model_config_data["aux_feature_dim"] = 0
+    model_config = QueryCNNTransformerConfig(**{key: value for key, value in model_config_data.items() if key in QueryCNNTransformerConfig.__annotations__})
 
     pin_memory = device.type == "cuda"
     train_loader = DataLoader(train_ds, batch_size=int(config["batch_size"]), shuffle=True, num_workers=int(config.get("num_workers", 0)), pin_memory=pin_memory)
@@ -135,6 +145,7 @@ def main() -> None:
         "train_config": config,
         "device": str(device),
         "task": "point_date_crop_stage_classification",
+        "aux_feature_names": train_ds.aux_feature_names,
     }
     history = fit_query(
         model=model,
@@ -154,6 +165,7 @@ def main() -> None:
         checkpoint_payload=payload,
         checkpoint_metric=str(config.get("checkpoint_metric", "val_loss")),
         tie_breaker_metric=str(config.get("tie_breaker_metric", "val_loss")),
+        label_smoothing=float(config.get("label_smoothing", 0.0)),
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "history.json").write_text(json.dumps(history, indent=2))

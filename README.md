@@ -22,6 +22,12 @@ runtime query rows: 942
 
 The model ran on CPU in the successful submission because the large CUDA PyTorch image exceeded the project build timeout. CPU inference completed successfully.
 
+First platform result snapshot:
+
+```text
+shown values: 0.969318, 0.862764, 0.0197
+```
+
 ## Important Finding
 
 Phenophase stage is strongly date-driven in this dataset.
@@ -171,6 +177,36 @@ Train the stronger submission configuration:
 python3 scripts/train.py --config configs/train_submission_date.json
 ```
 
+Train the date-aware model with auxiliary phenology/index features:
+
+```bash
+python3 scripts/train.py --config configs/train_submission_date_aux_features.json
+```
+
+Run the controlled experiment suite:
+
+```bash
+python3 scripts/run_experiments.py --suite configs/experiment_suite.json
+```
+
+Preview the suite without training:
+
+```bash
+python3 scripts/run_experiments.py --suite configs/experiment_suite.json --dry-run
+```
+
+Summarize experiment histories:
+
+```bash
+python3 scripts/summarize_experiments.py --root artifacts/models/experiments/date_query_feature_search_v1
+```
+
+Export optional auxiliary features for analysis:
+
+```bash
+python3 scripts/extract_aux_features.py --query-stage-features
+```
+
 Run the no-query-date ablation:
 
 ```bash
@@ -182,6 +218,7 @@ python3 scripts/train.py --config configs/train.json --no-query-date
 ```text
 configs/                  preprocessing, training, and submission configs
 data/                     PyTorch datasets and transforms
+docs/                     experiment plan and research notes
 models/                   CNN encoder + temporal Transformer
 preprocessing/            TIFF inventory, point mapping, patch extraction
 scripts/                  preprocess, audit, train, inference, validation
@@ -198,3 +235,4 @@ inference.py              root inference wrapper
 - The submission Dockerfile intentionally uses a lightweight Python base image and CPU PyTorch to avoid the project build timeout.
 - Duplicate `Longitude_Latitude_Date` rows in test input collapse to one JSON key; the code logs duplicate counts and keeps the first deterministic prediction.
 - `.gitlab-ci.yml` in this GitHub repo is only a lightweight reference. The official GitLab project uses its own CI template.
+- See `docs/EXPERIMENT_PLAN.md` before starting the next Colab sweep.

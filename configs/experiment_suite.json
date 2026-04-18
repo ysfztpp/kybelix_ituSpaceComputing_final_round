@@ -1,0 +1,83 @@
+{
+  "name": "date_query_feature_search_v1",
+  "base_config": "configs/train_submission_date.json",
+  "output_root": "artifacts/models/experiments/date_query_feature_search_v1",
+  "experiments": [
+    {
+      "name": "baseline_date_mask",
+      "overrides": {
+        "epochs": 80,
+        "label_smoothing": 0.0
+      }
+    },
+    {
+      "name": "aux_features_date_mask",
+      "overrides": {
+        "epochs": 90,
+        "use_aux_features": true,
+        "label_smoothing": 0.03,
+        "weight_decay": 0.035,
+        "model": {
+          "aux_hidden_dim": 128,
+          "dropout": 0.20
+        }
+      }
+    },
+    {
+      "name": "aux_features_no_mask_channels",
+      "overrides": {
+        "epochs": 90,
+        "use_aux_features": true,
+        "include_valid_mask_as_channels": false,
+        "label_smoothing": 0.03,
+        "model": {
+          "in_channels": 12,
+          "aux_hidden_dim": 128,
+          "dropout": 0.20
+        }
+      }
+    },
+    {
+      "name": "strong_regularization_aux",
+      "overrides": {
+        "epochs": 100,
+        "use_aux_features": true,
+        "label_smoothing": 0.05,
+        "weight_decay": 0.05,
+        "learning_rate": 0.0002,
+        "model": {
+          "aux_hidden_dim": 160,
+          "dropout": 0.25
+        }
+      }
+    },
+    {
+      "name": "no_query_date_ablation",
+      "flags": [
+        "--no-query-date"
+      ],
+      "overrides": {
+        "epochs": 40
+      }
+    },
+    {
+      "name": "no_time_date_ablation",
+      "flags": [
+        "--no-time-date"
+      ],
+      "overrides": {
+        "epochs": 40
+      }
+    },
+    {
+      "name": "shuffle_labels_sanity",
+      "flags": [
+        "--shuffle-labels"
+      ],
+      "overrides": {
+        "epochs": 8,
+        "early_stopping_patience": null
+      }
+    }
+  ]
+}

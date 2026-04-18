@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .aux_features import aux_feature_names, compute_aux_features
 from .transforms import NpzPatchNormalizer
 
 try:
@@ -33,6 +34,7 @@ class QueryDatePatchDataset(Dataset):
         rice_stage_loss_only: bool = True,
         shuffle_labels_seed: int | None = None,
         include_valid_mask_as_channels: bool = False,
+        use_aux_features: bool = False,
     ) -> None:
         if torch is None:
             raise ImportError("torch is required for QueryDatePatchDataset. Install PyTorch before training.")
@@ -49,6 +51,10 @@ class QueryDatePatchDataset(Dataset):
         self.normalizer = NpzPatchNormalizer(normalization_json, normalization_method) if normalization_json else None
         self.rice_stage_loss_only = bool(rice_stage_loss_only)
         self.include_valid_mask_as_channels = bool(include_valid_mask_as_channels)
+        self.use_aux_features = bool(use_aux_features)
+        self.bands = self.arrays.get("bands", np.asarray([f"B{i:02d}" for i in range(1, self.arrays["patches"].shape[2] + 1)])).astype(str).tolist()
+        self.aux_feature_names = aux_feature_names(self.bands) if self.use_aux_features else []
+        self.aux_feature_dim = len(self.aux_feature_names)
         rice_id = self._rice_class_id()
 
         rows: list[tuple[int, int, int, int, float]] = []
@@ -89,13 +95,14 @@ class QueryDatePatchDataset(Dataset):
 
     def __getitem__(self, item: int) -> dict[str, Any]:
         sample_index, stage_index, query_doy, crop_id, stage_weight = self.rows[item]
-        patches = self.arrays["patches"][sample_index]
+        raw_patches = self.arrays["patches"][sample_index]
+        patches = raw_patches
         valid_pixel_mask = self.arrays["valid_pixel_mask"][sample_index].astype(bool)
         if self.normalizer is not None:
             patches = self.normalizer(patches, valid_pixel_mask)
         if self.include_valid_mask_as_channels:
             patches = np.concatenate([patches, valid_pixel_mask.astype(np.float32)], axis=1)
-        return {
+        sample = {
             "patches": torch.from_numpy(patches.astype(np.float32, copy=False)),
             "valid_pixel_mask": torch.from_numpy(valid_pixel_mask),
             "band_mask": torch.from_numpy(self.arrays["band_mask"][sample_index].astype(bool)),
@@ -108,3 +115,14 @@ class QueryDatePatchDataset(Dataset):
             "sample_index": int(sample_index),
             "point_id": int(self.arrays["point_id"][sample_index]),
         }
+        if self.use_aux_features:
+            aux_features = compute_aux_features(
+                raw_patches,
+                valid_pixel_mask,
+                self.arrays["time_mask"][sample_index],
+                self.arrays["time_doy"][sample_index],
+                float(query_doy),
+                self.bands,
+            )
+            sample["aux_features"] = torch.from_numpy(aux_features)
+        return sample

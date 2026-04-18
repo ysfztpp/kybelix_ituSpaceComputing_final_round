@@ -10,6 +10,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from data.aux_features import aux_feature_dim, compute_aux_features
 from data.splits import make_train_val_split
 from data.transforms import NpzPatchNormalizer
 from preprocessing.filename import parse_tiff_name
@@ -91,10 +92,26 @@ def test_split_and_normalizer() -> None:
         assert np.isclose(out[:, 1].mean(), -0.25)
 
 
+def test_aux_features() -> None:
+    bands = ["B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B09", "B11", "B12"]
+    patches = np.full((3, 12, 5, 5), 0.2, dtype=np.float32)
+    patches[:, 7] = 0.7
+    patches[:, 3] = 0.3
+    patches[1, 10] = 0.4
+    valid = np.ones_like(patches, dtype=bool)
+    valid[2, :, 0, 0] = False
+    time_mask = np.asarray([True, True, False])
+    time_doy = np.asarray([100, 130, 160], dtype=np.int16)
+    features = compute_aux_features(patches, valid, time_mask, time_doy, query_doy=120, bands=bands)
+    assert features.shape == (aux_feature_dim(bands),)
+    assert np.isfinite(features).all()
+
+
 def main() -> None:
     test_filename_parser()
     test_patch_extract_and_masks()
     test_split_and_normalizer()
+    test_aux_features()
     print("light preprocessing tests passed")
 
 

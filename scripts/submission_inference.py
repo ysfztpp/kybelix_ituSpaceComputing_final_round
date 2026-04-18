@@ -12,6 +12,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from data.aux_features import compute_aux_features
 from data.transforms import NpzPatchNormalizer
 from models.query_cnn_transformer import QueryCNNTransformerClassifier, QueryCNNTransformerConfig
 from preprocessing.constants import BAND_ORDER, INVALID_FILL_VALUE, PATCH_SIZE
@@ -199,8 +200,26 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
             "time_doy": torch.from_numpy(arrays["time_doy"][indices].astype(np.float32)).to(device),
             "query_doy": torch.from_numpy(query_doys[start:end]).to(device),
         }
+        if int(model.config.aux_feature_dim) > 0:
+            bands = arrays.get("bands", np.asarray(BAND_ORDER)).astype(str).tolist()
+            aux = np.stack(
+                [
+                    compute_aux_features(
+                        arrays["patches"][sample_index],
+                        arrays["valid_pixel_mask"][sample_index],
+                        arrays["time_mask"][sample_index],
+                        arrays["time_doy"][sample_index],
+                        float(query_doy),
+                        bands,
+                    )
+                    for sample_index, query_doy in zip(indices, query_doys[start:end])
+                ]
+            )
+            if aux.shape[1] != int(model.config.aux_feature_dim):
+                raise ValueError(f"aux feature dimension mismatch: model expects {model.config.aux_feature_dim}, computed {aux.shape[1]}")
+            batch["aux_features"] = torch.from_numpy(aux.astype(np.float32, copy=False)).to(device)
         with torch.no_grad():
-            outputs = model(batch["patches"], batch["time_mask"], batch["time_doy"], batch["query_doy"])
+            outputs = model(batch["patches"], batch["time_mask"], batch["time_doy"], batch["query_doy"], batch.get("aux_features"))
         crop_chunks.append(outputs["crop_logits"].argmax(dim=1).cpu().numpy())
         stage_chunks.append(outputs["stage_logits"].argmax(dim=1).cpu().numpy())
 

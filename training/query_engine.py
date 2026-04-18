@@ -17,9 +17,19 @@ def _autocast_context(device: torch.device, enabled: bool):
     return torch.amp.autocast(device_type=device.type, dtype=dtype, enabled=device.type in {"cuda", "cpu"})
 
 
-def query_loss(outputs: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], stage_loss_weight: float) -> tuple[torch.Tensor, dict[str, float]]:
-    crop_loss = nn.functional.cross_entropy(outputs["crop_logits"], batch["crop_type_id"])
-    per_row_stage = nn.functional.cross_entropy(outputs["stage_logits"], batch["phenophase_stage_id"], reduction="none")
+def query_loss(
+    outputs: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+    stage_loss_weight: float,
+    label_smoothing: float = 0.0,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    crop_loss = nn.functional.cross_entropy(outputs["crop_logits"], batch["crop_type_id"], label_smoothing=label_smoothing)
+    per_row_stage = nn.functional.cross_entropy(
+        outputs["stage_logits"],
+        batch["phenophase_stage_id"],
+        reduction="none",
+        label_smoothing=label_smoothing,
+    )
     weights = batch["stage_loss_weight"].float()
     if weights.sum() > 0:
         stage_loss = (per_row_stage * weights).sum() / weights.sum().clamp_min(1.0)
@@ -52,6 +62,7 @@ def run_query_epoch(
     scaler: Any | None = None,
     gradient_accumulation_steps: int = 1,
     clip_grad_norm: float = 1.0,
+    label_smoothing: float = 0.0,
 ) -> dict[str, float]:
     model.train(train)
     totals = {"loss": 0.0, "crop_loss": 0.0, "stage_loss": 0.0, "crop_correct": 0.0, "stage_correct": 0.0, "rice_stage_correct": 0.0, "count": 0.0, "rice_stage_count": 0.0}
@@ -67,8 +78,14 @@ def run_query_epoch(
         for step, batch in enumerate(loader, start=1):
             batch = {key: value.to(device, non_blocking=True) if hasattr(value, "to") else value for key, value in batch.items()}
             with _autocast_context(device, amp):
-                outputs = model(batch["patches"], batch["time_mask"], batch["time_doy"], batch["query_doy"])
-                loss, parts = query_loss(outputs, batch, stage_loss_weight)
+                outputs = model(
+                    batch["patches"],
+                    batch["time_mask"],
+                    batch["time_doy"],
+                    batch["query_doy"],
+                    batch.get("aux_features"),
+                )
+                loss, parts = query_loss(outputs, batch, stage_loss_weight, label_smoothing)
                 loss_for_backward = loss / accumulation
             if train:
                 if scaler is not None and scaler.is_enabled():
@@ -135,6 +152,7 @@ def fit_query(
     checkpoint_payload: dict[str, Any] | None = None,
     checkpoint_metric: str = "val_loss",
     tie_breaker_metric: str = "val_loss",
+    label_smoothing: float = 0.0,
 ) -> list[dict[str, Any]]:
     history: list[dict[str, Any]] = []
     maximize_checkpoint_metric = "loss" not in checkpoint_metric.lower()
@@ -148,8 +166,32 @@ def fit_query(
         # Log the learning rate actually used during this epoch. The scheduler is
         # stepped at the end so the printed value is not accidentally one epoch ahead.
         lr_used = float(optimizer.param_groups[0]["lr"])
-        train_metrics = run_query_epoch(model, train_loader, optimizer, device, True, stage_loss_weight, amp, scaler, gradient_accumulation_steps, clip_grad_norm)
-        val_metrics = run_query_epoch(model, val_loader, optimizer, device, False, stage_loss_weight, False, None, 1, clip_grad_norm)
+        train_metrics = run_query_epoch(
+            model,
+            train_loader,
+            optimizer,
+            device,
+            True,
+            stage_loss_weight,
+            amp,
+            scaler,
+            gradient_accumulation_steps,
+            clip_grad_norm,
+            label_smoothing,
+        )
+        val_metrics = run_query_epoch(
+            model,
+            val_loader,
+            optimizer,
+            device,
+            False,
+            stage_loss_weight,
+            False,
+            None,
+            1,
+            clip_grad_norm,
+            0.0,
+        )
         row = {"epoch": epoch, "lr": lr_used, **{f"train_{k}": v for k, v in train_metrics.items()}, **{f"val_{k}": v for k, v in val_metrics.items()}}
         for prefix in ("train", "val"):
             row[f"{prefix}_competition_score"] = 0.4 * row[f"{prefix}_crop_macro_f1"] + 0.6 * row[f"{prefix}_rice_stage_macro_f1"]
