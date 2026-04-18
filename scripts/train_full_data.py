@@ -1,0 +1,158 @@
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+try:
+    import torch
+    from torch.utils.data import DataLoader
+except ImportError as exc:  # pragma: no cover
+    raise ImportError("torch is required. In Colab run with a PyTorch runtime.") from exc
+
+from data.query_dataset_npz import QueryDatePatchDataset
+from models.query_cnn_transformer import QueryCNNTransformerClassifier, QueryCNNTransformerConfig
+from scripts.train import build_scheduler, collect_git_metadata, resolve_path, seed_everything, select_device
+from training.query_engine import run_query_epoch
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train the selected C03-style model on all labeled data for a fixed epoch count.")
+    parser.add_argument("--config", type=Path, default=ROOT / "configs" / "train_full_data_c03_epoch75.json")
+    parser.add_argument("--epochs", type=int, default=None, help="Override fixed epoch count. Use only for deliberate experiments.")
+    return parser.parse_args()
+
+
+def save_checkpoint(
+    *,
+    output_dir: Path,
+    model: torch.nn.Module,
+    epoch: int,
+    history: list[dict[str, Any]],
+    payload: dict[str, Any],
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint = dict(payload)
+    checkpoint.update(
+        {
+            "model_state_dict": model.state_dict(),
+            "epoch": epoch,
+            "checkpoint_metric": "fixed_epoch_full_data",
+            "best_metric_value": None,
+            "best_epoch": epoch,
+            "tie_breaker_metric": None,
+            "best_tie_breaker_value": None,
+            "best_val_loss": None,
+            "history": history,
+            "full_data_training": True,
+            "selection_rule": "Fixed epoch selected before training from prior validation: C00 and C03 both selected epoch 75.",
+        }
+    )
+    torch.save(checkpoint, output_dir / "model.pt")
+
+
+def main() -> None:
+    args = parse_args()
+    config = json.loads(resolve_path(args.config).read_text())
+    seed_everything(int(config.get("seed", 42)))
+    device = select_device(str(config.get("device", "auto")))
+
+    if config.get("use_aux_features", False):
+        raise ValueError("Full-data C03 setup is intentionally baseline-only; use_aux_features must stay false/absent.")
+
+    train_ds = QueryDatePatchDataset(
+        npz_path=resolve_path(config["dataset_npz"]),
+        split_csv=None,
+        split=None,
+        normalization_json=resolve_path(config["normalization_json"]),
+        rice_stage_loss_only=bool(config.get("rice_stage_loss_only", True)),
+        include_valid_mask_as_channels=bool(config.get("include_valid_mask_as_channels", True)),
+        use_aux_features=False,
+    )
+
+    model_config_data = dict(config.get("model", {}))
+    model_config_data["aux_feature_dim"] = 0
+    model_config = QueryCNNTransformerConfig(**{key: value for key, value in model_config_data.items() if key in QueryCNNTransformerConfig.__annotations__})
+    if model_config.in_channels != 24 or not model_config.use_query_doy or not model_config.use_time_doy:
+        raise ValueError("Full-data C03 setup must keep 24 channels, query DOY, and acquisition DOY enabled.")
+
+    pin_memory = device.type == "cuda"
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=int(config["batch_size"]),
+        shuffle=True,
+        num_workers=int(config.get("num_workers", 0)),
+        pin_memory=pin_memory,
+    )
+
+    model = QueryCNNTransformerClassifier(model_config).to(device)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=float(config["learning_rate"]),
+        weight_decay=float(config.get("weight_decay", 0.01)),
+    )
+    epochs = int(args.epochs or config.get("epochs", 75))
+    scheduler = build_scheduler(config, optimizer, epochs)
+    scaler = torch.amp.GradScaler("cuda", enabled=bool(config.get("amp", False)) and device.type == "cuda")
+    output_dir = resolve_path(config["output_dir"])
+    git_metadata = collect_git_metadata()
+
+    payload = {
+        "model_config": asdict(model_config),
+        "train_config": config,
+        "device": str(device),
+        "task": "point_date_crop_stage_classification_full_data_fixed_epoch",
+        "aux_feature_names": [],
+        "git": git_metadata,
+    }
+
+    history: list[dict[str, Any]] = []
+    for epoch in range(1, epochs + 1):
+        lr_used = float(optimizer.param_groups[0]["lr"])
+        train_metrics = run_query_epoch(
+            model=model,
+            loader=train_loader,
+            optimizer=optimizer,
+            device=device,
+            train=True,
+            stage_loss_weight=float(config.get("stage_loss_weight", 0.6)),
+            amp=bool(config.get("amp", False)),
+            scaler=scaler,
+            gradient_accumulation_steps=int(config.get("gradient_accumulation_steps", 1)),
+            clip_grad_norm=float(config.get("clip_grad_norm", 1.0)),
+            label_smoothing=float(config.get("label_smoothing", 0.0)),
+        )
+        row = {"epoch": epoch, "lr": lr_used, **{f"train_{key}": value for key, value in train_metrics.items()}}
+        row["train_competition_score"] = 0.4 * row["train_crop_macro_f1"] + 0.6 * row["train_rice_stage_macro_f1"]
+        history.append(row)
+        print(row)
+        if scheduler is not None:
+            scheduler.step()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "history.json").write_text(json.dumps(history, indent=2))
+    (output_dir / "config_resolved.json").write_text(json.dumps({**payload, "history_file": str(output_dir / "history.json")}, indent=2))
+    save_checkpoint(output_dir=output_dir, model=model, epoch=epochs, history=history, payload=payload)
+    summary = {
+        "experiment": output_dir.name,
+        "training_mode": "full_data_fixed_epoch",
+        "epoch": epochs,
+        "selection_rule": "Epoch fixed before training from prior validation evidence: C00 and C03 both selected epoch 75.",
+        "train_queries": len(train_ds),
+        "final_train_competition_score": history[-1].get("train_competition_score") if history else None,
+        "final_train_loss": history[-1].get("train_loss") if history else None,
+        "model_config": asdict(model_config),
+        "git": git_metadata,
+    }
+    (output_dir / "metrics_summary.json").write_text(json.dumps(summary, indent=2))
+    print(json.dumps({"model": str(output_dir / "model.pt"), "history": str(output_dir / "history.json"), "device": str(device), "train_queries": len(train_ds)}, indent=2))
+
+
+if __name__ == "__main__":
+    main()

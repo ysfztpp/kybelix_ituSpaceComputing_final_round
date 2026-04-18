@@ -1,106 +1,134 @@
 # Experiment Plan
 
-This branch keeps the successful submission path intact and uses controlled experiments for model search.
+Last updated: 2026-04-18
 
-## Baseline We Trust
+The previous C03-C09 suite has completed in the upper-folder archive `../models`. Current detailed results are in `docs/EXPERIMENT_RESULTS.md`, and the full model explanation is in `docs/DETAILED_MODEL_REPORT.md`.
 
-C00 is the safe checkpoint because it passed the platform. Do not overwrite `checkpoints/model.pt` until a new model is clearly better and validation passes locally.
+## Current Baseline Decision
 
-The model family that works is:
+The safest model family remains:
 
 - Sentinel-2 patch time series as the main input.
-- CNN patch encoder for each date.
+- 12 spectral bands plus 12 valid-mask channels.
+- CNN patch encoder for each acquisition date.
 - Transformer over the date sequence.
 - Query day-of-year enabled.
 - Acquisition day-of-year enabled.
-- Valid-pixel mask channels enabled.
+- No auxiliary feature branch for the safest baseline.
 
-The first submission result was strong, so the default path should remain date-aware.
+The safe fallback is still C00/E1 because it passed the platform. The best reproduced current-code baseline is C03.
 
-## Why We Are Testing Features
+## What The Completed Suite Proved
 
-The literature direction is consistent with what our results show: crop and phenophase prediction depend heavily on seasonal trajectories. Raw time-series Transformers can learn those trajectories, but explicit vegetation and moisture indices can sometimes help because they expose phenology signals directly.
-
-The feature branch is therefore a side branch, not a replacement for the CNN/Transformer path. The raw patch sequence remains the main signal.
-
-## Current Feature Set
-
-Implemented in `data/aux_features.py`.
-
-For each query, we compute:
-
-- Per-band median, standard deviation, min, max, amplitude, and valid ratio.
-- Vegetation-index summaries for `NDVI`, `EVI`, `NDMI`, `NBR`, `NDRE`, `SAVI`, and `GNDVI`.
-- Query day-of-year scaled to `[0, 1]`.
-- Distance from the query date to the nearest acquisition date.
-- Nearest-date band medians and nearest-date vegetation-index values.
-
-Invalid pixels are ignored when computing features. Missing values are converted to `0.0` only inside the auxiliary vector.
-
-## What We Learned So Far
-
-| ID | Result | Lesson |
+|Experiment|Result|Decision|
 |---|---|---|
-| C00 | Platform passed, validation loss `0.063148` | Safe checkpoint. Do not overwrite. |
-| C01 | Aux + smoothing score `0.935991` | Not good enough. Also not a clean feature test because several regularization settings changed. |
-| C02 | Baseline repeat score `1.000000`, loss `0.267392` | Baseline is reproducible, but lower-confidence than C00. |
+|C03 C00 hyperparameter reproduction|Val score `1.000000`, val loss `0.061087`|C00-style batch/LR and loss checkpointing reproduce the strong low-loss baseline.|
+|C04 original-speed aux features|Val score `0.995363`, val loss `0.010718`|Interesting low-loss result, but not better than C03 on score.|
+|C04 fast repeat|Val score `0.952619`|Aux features are unstable under 512/0.0004 in this run.|
+|C05 small aux branch|Val score `0.976170`|Smaller aux branch helps versus C04 repeat but still loses to C03.|
+|C06 no mask channels|Val score `0.974086`|Keep valid-mask channels.|
+|C07 no query date|Val score `0.436115`|Query date is essential. Do not remove it.|
+|C08 no acquisition date|Val score `0.997683`, val loss `0.197197`|Acquisition date is less critical than query date, but should stay for confidence.|
+|C09 shuffled labels|Val score `0.178458`|Sanity check correctly fails; no obvious leakage signal.|
 
-## Next Controlled Suite
+## Immediate Next Steps
 
-The active suite is `configs/experiment_suite.json`.
+1. Keep `checkpoints/model.pt` unchanged until a replacement passes validation.
+2. If testing C03 as a replacement, copy it into `checkpoints/model.pt` only in a controlled branch or backup the current file first.
+3. Run local submission validation after any checkpoint replacement.
+4. If platform submissions are limited, prioritize C03 over auxiliary-feature checkpoints.
+5. Keep the C00/E1 checkpoint available as rollback.
 
-Run only C03 first:
+## Model Selection Rule
 
-```bash
-python scripts/run_experiments.py --suite configs/experiment_suite.json --only C03_reproduce_C00_lr0004_bs512_valloss
-```
+Use this order for candidate selection:
 
-Reason: this tells us whether the C00 low loss was mostly caused by `batch_size=512` and `learning_rate=0.0004`.
+1. Platform result, if available.
+2. Higher validation competition score.
+3. Higher rice-stage macro F1.
+4. Higher crop macro F1.
+5. Lower validation loss.
+6. Smaller train-validation score gap.
+7. Simpler model if metrics are close.
 
-Then run C04:
+For current artifacts, this selects C00/E1 as the submitted fallback and C03 as the best reproduced current-code candidate.
 
-```bash
-python scripts/run_experiments.py --suite configs/experiment_suite.json --only C04_aux_features_only
-```
+## Recommended Future Experiments
 
-Reason: this tests engineered features without label smoothing, extra weight decay, or higher dropout.
+### 1. Validate C03 End To End
 
-After C03 and C04, use the results to decide:
+Goal: confirm that C03 can replace C00 without packaging or inference issues.
 
-| If Result | Decision |
-|---|---|
-| C03 gets loss near C00 | Use C00-style hyperparameters for the next serious candidates. |
-| C03 stays near C02 loss | Loss difference is not only hyperparameters; keep comparing by score and platform validation. |
-| C04 beats C02 | Keep auxiliary features and tune branch size. |
-| C04 loses to C02 | Features are not yet useful; try smaller branch C05 or feature selection. |
+Actions:
 
-## Full Suite Meaning
-
-| ID | Experiment | Why It Exists |
-|---|---|---|
-| C03 | Reproduce C00 hyperparameters | Separates code changes from hyperparameter effects. |
-| C04 | Aux features only | Clean test of explicit phenology/spectral features. |
-| C05 | Aux features small branch | Checks if the feature branch is too large/noisy. |
-| C06 | Aux features without mask channels | Tests whether features can replace valid-mask channels. |
-| C07 | No query date ablation | Measures query-date dependence. |
-| C08 | No acquisition date ablation | Measures acquisition-time dependence. |
-| C09 | Shuffle-label sanity | Must fail; protects us from leakage mistakes. |
-
-## Decision Rule
-
-Pick candidates in this order:
-
-1. Higher `val_competition_score`.
-2. Higher `val_rice_stage_macro_f1`.
-3. Higher `val_crop_macro_f1`.
-4. Lower `val_loss`.
-5. Smaller train-validation score gap.
-6. Simpler model if metrics are close.
-
-Before a second real submission:
-
-- Check the new checkpoint's `metrics_summary.json`.
-- Check the git commit in `config_resolved.json`.
-- Copy only the chosen checkpoint to `checkpoints/model.pt`.
+- Inspect C03 checkpoint metadata in a PyTorch environment.
+- Copy C03 checkpoint to `checkpoints/model.pt` only after backing up C00.
 - Run `python scripts/validate_submission.py`.
-- Keep a backup folder for the old C00 checkpoint.
+- Compare generated output format and prediction distribution.
+
+### 2. Revisit C04 Carefully
+
+C04 original-speed run had very low validation loss but not perfect score. That makes it interesting but not immediately safe.
+
+Questions:
+
+- Was the very low loss caused by auxiliary features or by training dynamics?
+- Why did the 512/0.0004 repeat perform much worse?
+- Does C04 generalize better on platform despite lower validation score?
+
+Possible controlled reruns:
+
+- C04 with batch 128 and LR 0.00025, same seed.
+- C04 with batch 512 and lower LR.
+- C04 with frozen or smaller auxiliary branch.
+- C04 with auxiliary feature normalization checks.
+
+### 3. Keep Query-Date Ablation As Evidence
+
+C07 is useful for the article/presentation because it demonstrates why the model is query-date-aware.
+
+Main message:
+
+- Crop prediction survives without query date.
+- Phenophase prediction fails without query date.
+
+### 4. Use C09 As A Required Data-Safety Check
+
+Run the shuffle-label sanity check whenever changing:
+
+- preprocessing,
+- train/validation split logic,
+- query-row construction,
+- label handling,
+- date handling.
+
+If C09 ever performs well, stop and debug leakage.
+
+### 5. Runtime Optimization Separate From Science Experiments
+
+On L4, VRAM usage around 7-8 GB is expected. Speed may be limited by CPU/DataLoader work rather than GPU memory.
+
+If training is too slow, test these separately from model-quality experiments:
+
+- `num_workers = 4`
+- `num_workers = 8`
+- persistent workers, if added to the code later
+- precomputing auxiliary features, if aux experiments remain important
+
+Do not combine runtime changes with scientific ablations unless the table clearly says so.
+
+## Article/Presentation Claims That Are Currently Supported
+
+Supported:
+
+- The model uses a CNN to encode local image patches and a Transformer to model the time sequence.
+- Query date is essential for phenophase prediction.
+- Valid-pixel masks improve robustness and should stay.
+- C00-style larger-batch training is reproducible in C03.
+- The shuffle-label check fails, which supports the absence of direct label leakage in the training loop.
+
+Avoid overstating:
+
+- Do not claim auxiliary features improve the final model yet.
+- Do not claim acquisition-date encoding is unnecessary; C08 kept high F1 but had worse loss.
+- Do not claim C04 is strictly better than C03; it has lower loss but lower score.
