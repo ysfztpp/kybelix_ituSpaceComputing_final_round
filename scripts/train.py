@@ -75,6 +75,76 @@ def seed_everything(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def _with_derived_scores(row: dict[str, Any]) -> dict[str, Any]:
+    """Make every history row contain the same score fields."""
+
+    row = dict(row)
+    for prefix in ("train", "val"):
+        key = f"{prefix}_competition_score"
+        if key not in row:
+            row[key] = 0.4 * float(row.get(f"{prefix}_crop_macro_f1", 0.0)) + 0.6 * float(row.get(f"{prefix}_rice_stage_macro_f1", 0.0))
+    return row
+
+
+def _best_history_row(history: list[dict[str, Any]], metric: str, tie_breaker: str) -> dict[str, Any]:
+    rows = [_with_derived_scores(row) for row in history]
+    if not rows:
+        return {}
+    maximize = "loss" not in metric.lower()
+    best = rows[0]
+    for row in rows[1:]:
+        current = float(row.get(metric, float("-inf") if maximize else float("inf")))
+        previous = float(best.get(metric, float("-inf") if maximize else float("inf")))
+        current_tie = float(row.get(tie_breaker, float("inf")))
+        previous_tie = float(best.get(tie_breaker, float("inf")))
+        improved = current > previous if maximize else current < previous
+        tied_better = abs(current - previous) <= 1e-12 and current_tie < previous_tie
+        if improved or tied_better:
+            best = row
+    return best
+
+
+def write_metrics_summary(output_dir: Path, history: list[dict[str, Any]], config: dict[str, Any], model_config: QueryCNNTransformerConfig) -> None:
+    """Write a compact table row next to every trained model."""
+
+    metric = str(config.get("checkpoint_metric", "val_loss"))
+    tie_breaker = str(config.get("tie_breaker_metric", "val_loss"))
+    best = _best_history_row(history, metric, tie_breaker)
+    final = _with_derived_scores(history[-1]) if history else {}
+    summary = {
+        "experiment": output_dir.name,
+        "output_dir": str(output_dir),
+        "selection_metric": metric,
+        "tie_breaker": tie_breaker,
+        "epochs_ran": len(history),
+        "best_epoch": best.get("epoch"),
+        "best_val_competition_score": best.get("val_competition_score"),
+        "best_val_loss": best.get("val_loss"),
+        "best_val_crop_macro_f1": best.get("val_crop_macro_f1"),
+        "best_val_rice_stage_macro_f1": best.get("val_rice_stage_macro_f1"),
+        "best_val_crop_accuracy": best.get("val_crop_accuracy"),
+        "best_val_rice_stage_accuracy": best.get("val_rice_stage_accuracy"),
+        "best_train_competition_score": best.get("train_competition_score"),
+        "train_val_score_gap": float(best.get("train_competition_score", 0.0)) - float(best.get("val_competition_score", 0.0)),
+        "final_epoch": final.get("epoch"),
+        "final_val_competition_score": final.get("val_competition_score"),
+        "final_val_loss": final.get("val_loss"),
+        "model_config": asdict(model_config),
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "metrics_summary.json").write_text(json.dumps(summary, indent=2))
+    markdown = "\n".join(
+        [
+            "|experiment|best_epoch|best_val_score|crop_f1|rice_stage_f1|val_loss|gap|",
+            "|---|---|---|---|---|---|---|",
+            "|{experiment}|{best_epoch}|{best_val_competition_score:.6f}|{best_val_crop_macro_f1:.6f}|{best_val_rice_stage_macro_f1:.6f}|{best_val_loss:.6f}|{train_val_score_gap:.6f}|".format(
+                **{key: (0.0 if value is None and key.startswith(("best_", "train_")) else value) for key, value in summary.items()}
+            ),
+        ]
+    )
+    (output_dir / "metrics_summary.md").write_text(markdown + "\n")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train one CNN+Transformer query-date model.")
     parser.add_argument("--config", type=Path, default=ROOT / "configs" / "train.json")
@@ -170,6 +240,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "history.json").write_text(json.dumps(history, indent=2))
     (output_dir / "config_resolved.json").write_text(json.dumps({**payload, "history_file": str(output_dir / "history.json")}, indent=2))
+    write_metrics_summary(output_dir, history, config, model_config)
     print(json.dumps({"model": str(output_dir / "model.pt"), "history": str(output_dir / "history.json"), "device": str(device), "train_queries": len(train_ds), "val_queries": len(val_ds)}, indent=2))
 
 

@@ -201,6 +201,18 @@ Summarize experiment histories:
 python3 scripts/summarize_experiments.py --root artifacts/models/experiments/date_query_feature_search_v1
 ```
 
+Summarize all local model folders as a markdown table:
+
+```bash
+python3 scripts/summarize_experiments.py --root artifacts/models --format markdown
+```
+
+Inspect one saved checkpoint:
+
+```bash
+python3 scripts/inspect_checkpoint.py checkpoints/model.pt
+```
+
 Export optional auxiliary features for analysis:
 
 ```bash
@@ -236,3 +248,4 @@ inference.py              root inference wrapper
 - Duplicate `Longitude_Latitude_Date` rows in test input collapse to one JSON key; the code logs duplicate counts and keeps the first deterministic prediction.
 - `.gitlab-ci.yml` in this GitHub repo is only a lightweight reference. The official GitLab project uses its own CI template.
 - See `docs/EXPERIMENT_PLAN.md` before starting the next Colab sweep.
+- See `docs/EXPERIMENT_RESULTS.md` for the current experiment table and decision rule.

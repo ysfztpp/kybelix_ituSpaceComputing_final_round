@@ -30,7 +30,12 @@ class QueryCNNTransformerConfig:
 
 
 class QueryCNNTransformerClassifier(nn.Module):
-    """PDF-aligned model: full time series + query date -> crop class + stage class."""
+    """PDF-aligned model: full patch time series + query date -> crop + stage.
+
+    The main path remains the real Sentinel-2 patch tensor. Optional auxiliary
+    features are fused only after temporal pooling, so feature engineering can be
+    tested without replacing the CNN/Transformer image-time-series learner.
+    """
 
     def __init__(self, config: QueryCNNTransformerConfig) -> None:
         super().__init__()
@@ -51,6 +56,9 @@ class QueryCNNTransformerClassifier(nn.Module):
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=config.transformer_layers)
         self.pool = MaskedTemporalPool()
         if config.aux_feature_dim > 0:
+            # Auxiliary features are compact phenology/index summaries. They are
+            # deliberately kept in a small side branch to avoid dominating the
+            # raw patch encoder.
             self.aux_mlp = nn.Sequential(
                 nn.LayerNorm(config.aux_feature_dim),
                 nn.Linear(config.aux_feature_dim, config.aux_hidden_dim),
