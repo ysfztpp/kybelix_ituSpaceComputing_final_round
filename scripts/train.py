@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import random
+import subprocess
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -75,6 +76,34 @@ def seed_everything(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def collect_git_metadata() -> dict[str, Any]:
+    """Record the exact code state used for a training run."""
+
+    def run_git(*args: str) -> str | None:
+        try:
+            completed = subprocess.run(
+                ["git", *args],
+                cwd=ROOT,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return None
+        return completed.stdout.strip()
+
+    commit = run_git("rev-parse", "--short", "HEAD")
+    branch = run_git("rev-parse", "--abbrev-ref", "HEAD")
+    status = run_git("status", "--short")
+    return {
+        "commit": commit,
+        "branch": branch,
+        "dirty": bool(status),
+        "status_short": status or "",
+    }
+
+
 def _with_derived_scores(row: dict[str, Any]) -> dict[str, Any]:
     """Make every history row contain the same score fields."""
 
@@ -104,7 +133,13 @@ def _best_history_row(history: list[dict[str, Any]], metric: str, tie_breaker: s
     return best
 
 
-def write_metrics_summary(output_dir: Path, history: list[dict[str, Any]], config: dict[str, Any], model_config: QueryCNNTransformerConfig) -> None:
+def write_metrics_summary(
+    output_dir: Path,
+    history: list[dict[str, Any]],
+    config: dict[str, Any],
+    model_config: QueryCNNTransformerConfig,
+    git_metadata: dict[str, Any],
+) -> None:
     """Write a compact table row next to every trained model."""
 
     metric = str(config.get("checkpoint_metric", "val_loss"))
@@ -130,6 +165,7 @@ def write_metrics_summary(output_dir: Path, history: list[dict[str, Any]], confi
         "final_val_competition_score": final.get("val_competition_score"),
         "final_val_loss": final.get("val_loss"),
         "model_config": asdict(model_config),
+        "git": git_metadata,
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "metrics_summary.json").write_text(json.dumps(summary, indent=2))
@@ -209,6 +245,7 @@ def main() -> None:
     epochs = int(args.epochs or config.get("epochs", 10))
     scheduler = build_scheduler(config, optimizer, epochs)
     output_dir = resolve_path(config["output_dir"])
+    git_metadata = collect_git_metadata()
 
     payload = {
         "model_config": asdict(model_config),
@@ -216,6 +253,7 @@ def main() -> None:
         "device": str(device),
         "task": "point_date_crop_stage_classification",
         "aux_feature_names": train_ds.aux_feature_names,
+        "git": git_metadata,
     }
     history = fit_query(
         model=model,
@@ -240,7 +278,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "history.json").write_text(json.dumps(history, indent=2))
     (output_dir / "config_resolved.json").write_text(json.dumps({**payload, "history_file": str(output_dir / "history.json")}, indent=2))
-    write_metrics_summary(output_dir, history, config, model_config)
+    write_metrics_summary(output_dir, history, config, model_config, git_metadata)
     print(json.dumps({"model": str(output_dir / "model.pt"), "history": str(output_dir / "history.json"), "device": str(device), "train_queries": len(train_ds), "val_queries": len(val_ds)}, indent=2))
 
 

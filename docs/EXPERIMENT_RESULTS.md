@@ -1,9 +1,12 @@
 # Experiment Results
 
-This file is the human-readable tracker. The source of truth for future runs is each model folder:
+This file is the human-readable experiment tracker. For future runs, the source of truth is each model output folder.
 
-- `history.json`: every epoch.
+Keep these files for every serious run:
+
 - `model.pt`: saved checkpoint.
+- `history.json`: every epoch.
+- `config_resolved.json`: exact resolved config, now including git commit information.
 - `metrics_summary.json`: compact best-epoch summary for new runs.
 - `metrics_summary.md`: one-row markdown summary for new runs.
 
@@ -19,51 +22,79 @@ Inspect one checkpoint with:
 python scripts/inspect_checkpoint.py artifacts/models/submission_cnn_transformer_date/model.pt
 ```
 
-## Current Table
+## Current Results
 
-| ID | Experiment | Config | Feature Branch | Query Date | Acquisition Date | Best Epoch | Best Val Score | Crop F1 | Rice Stage F1 | Val Loss | Status | Interpretation |
-|---|---|---|---|---|---|---:|---:|---:|---:|---:|---|---|
-| E00 | First platform submission | `checkpoints/model.pt` | No | Yes | Yes | 75 | legacy checkpoint | not stored as score | not stored as score | 0.063148 | Submitted | Safe checkpoint that passed the platform. Keep until a better submission candidate is proven. |
-| E01 | Baseline repeat on `dev` | `configs/train_submission_date.json` | No | Yes | Yes | 67 | 1.000000 | 1.000000 | 1.000000 | 0.267392 | Done | Strongest current validation result. This is the model family to beat. |
-| E02 | Aux features with smoothing | `configs/train_submission_date_aux_features.json` | Yes | Yes | Yes | 21 | 0.935991 | 1.000000 | 0.893318 | 0.366777 | Done | Useful but worse than the baseline repeat. Label smoothing and/or feature noise likely hurt. |
+| Chrono ID | Former ID | Experiment | Config / Model | Code Commit | Best Epoch | Best Val Score | Crop F1 | Rice Stage F1 | Val Loss | Status | Meaning |
+|---|---|---|---|---|---:|---:|---:|---:|---:|---|---|
+| C00 | E00 | First platform submission | `checkpoints/model.pt` | platform: `28d94fb6`; repo checkpoint: `424868d`; cleaned package: `254d04e` | 75 | 1.000000 post-computed | 1.000000 | 1.000000 | 0.063148 | Submitted | Safe fallback. This checkpoint passed the real platform. |
+| C01 | E02 | Aux features + label smoothing | `configs/train_submission_date_aux_features.json` | likely `7696d84` | 21 | 0.935991 | 1.000000 | 0.893318 | 0.366777 | Done | Worse than baseline. The result is not a clean feature test because smoothing, dropout, and weight decay also changed. |
+| C02 | E01 | Latest baseline repeat | `configs/train_submission_date.json` | likely `334fe92` or `7696d84` | 67 | 1.000000 | 1.000000 | 1.000000 | 0.267392 | Done | Confirms the date-aware baseline is strong, but its loss is higher than C00. |
 
-## What The Latest Baseline Run Means
+## Why C00 And C02 Have Different Loss
 
-The latest baseline repeat used:
+Both C00 and C02 reached perfect validation score. The loss is different because cross-entropy also measures confidence, not just correctness.
 
-- CNN patch encoder.
-- Transformer temporal encoder.
-- Query day-of-year enabled.
-- Acquisition day-of-year enabled.
-- Valid-pixel mask channels enabled.
-- No auxiliary feature branch.
+The important differences are:
 
-It reached perfect validation macro-F1 at multiple epochs. The selected checkpoint should be epoch 67 because the checkpoint metric is `val_competition_score` and `val_loss` is the tie breaker.
+- C00 used `batch_size=512` and `learning_rate=0.0004`.
+- C02 used `batch_size=128` and `learning_rate=0.00025`.
+- C00 was selected mainly by validation loss.
+- C02 was selected by `val_competition_score`, using `val_loss` only as a tie breaker.
+- The baseline model path did not change in a way that explains this by itself.
 
-Important detail:
+So the next clean check is C03: reproduce the C00-style hyperparameters with the current code.
 
-- The last epoch is not necessarily the saved checkpoint.
-- The selected checkpoint is the best validation score, then lower validation loss if scores tie.
+## Current Decision
 
-## Next Experiments
+Do not replace `checkpoints/model.pt` yet.
 
-| Order | ID | Experiment | Reason |
-|---:|---|---|---|
-| 1 | E03 | Aux features without label smoothing | Tests if smoothing caused the weaker aux result. |
-| 2 | E04 | Aux features with lower dropout | Tests whether the aux model was over-regularized. |
-| 3 | E05 | Shuffle-label sanity check | Must fail; if it does not fail, there is leakage. |
-| 4 | E06 | No query date ablation | Measures dependence on the query date. |
-| 5 | E07 | No acquisition date ablation | Measures dependence on image acquisition dates. |
-| 6 | E08 | CNN + BiGRU attention | Next model family if baseline remains strongest. |
+The safe checkpoint is still C00 because it already passed the platform and has the lowest validation loss. C02 is useful because it confirms the model family is reproducible. C01 should not be used as a submission candidate.
+
+## Next Feature Search
+
+The next suite is `configs/experiment_suite.json`. It uses chronological IDs starting from C03.
+
+| Order | ID | Experiment | Reason | What We Learn |
+|---:|---|---|---|---|
+| 1 | C03 | Reproduce C00 hyperparameters | Before testing more features, we need to know whether the low C00 loss comes from batch size and learning rate. | If loss returns near 0.06, the difference was mostly hyperparameters/checkpointing. |
+| 2 | C04 | Aux features only | C01 changed too many things at once. This tests features without label smoothing or extra regularization. | If this improves over C02, engineered features help. |
+| 3 | C05 | Aux features with smaller branch | A large feature branch can inject noisy shortcuts. | If C05 beats C04, features help but need weaker capacity. |
+| 4 | C06 | Aux features without mask channels | Tests whether explicit validity/statistics features can replace raw valid-mask channels. | If it drops, keep mask channels. |
+| 5 | C07 | No query date ablation | Query date is probably important for stage. | If score drops, query date is real signal, not optional. |
+| 6 | C08 | No acquisition date ablation | Acquisition timing tells the transformer where observations are in the season. | If score drops, keep time-date encoding. |
+| 7 | C09 | Shuffle-label sanity | This must fail. | If it does not fail, there is leakage or split contamination. |
+
+Run one experiment first:
+
+```bash
+python scripts/run_experiments.py --suite configs/experiment_suite.json --only C03_reproduce_C00_lr0004_bs512_valloss
+```
+
+Then run the first clean feature test:
+
+```bash
+python scripts/run_experiments.py --suite configs/experiment_suite.json --only C04_aux_features_only
+```
+
+Run the full suite only after these two finish cleanly:
+
+```bash
+python scripts/run_experiments.py --suite configs/experiment_suite.json
+```
 
 ## Decision Rule
 
-Use this order:
+Use this order when choosing a new candidate:
 
-1. Highest `val_competition_score`.
+1. Higher `val_competition_score`.
 2. Higher `val_rice_stage_macro_f1`.
 3. Higher `val_crop_macro_f1`.
 4. Lower `val_loss`.
 5. Smaller train-validation score gap.
+6. Simpler model if all metrics are close.
 
-Do not replace `checkpoints/model.pt` until a new candidate is clearly better and validated with `scripts/validate_submission.py`.
+Only replace `checkpoints/model.pt` after the candidate beats C00/C02 and passes:
+
+```bash
+python scripts/validate_submission.py
+```

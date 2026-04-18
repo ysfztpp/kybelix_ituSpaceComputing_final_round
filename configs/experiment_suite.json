@@ -1,82 +1,97 @@
 {
-  "name": "date_query_feature_search_v1",
+  "name": "feature_search_v2",
   "base_config": "configs/train_submission_date.json",
-  "output_root": "artifacts/models/experiments/date_query_feature_search_v1",
+  "output_root": "artifacts/models/experiments/feature_search_v2",
   "experiments": [
     {
-      "name": "baseline_date_mask",
+      "name": "C03_reproduce_C00_lr0004_bs512_valloss",
+      "reason": "Checks whether the very low C00 loss came mainly from the original larger batch and higher learning rate.",
       "overrides": {
         "epochs": 80,
+        "batch_size": 512,
+        "learning_rate": 0.0004,
+        "min_lr": 0.0,
+        "checkpoint_metric": "val_loss",
+        "tie_breaker_metric": "val_loss",
         "label_smoothing": 0.0
       }
     },
     {
-      "name": "aux_features_date_mask",
+      "name": "C04_aux_features_only",
+      "reason": "Tests engineered phenology/spectral features alone, without also changing regularization.",
       "overrides": {
         "epochs": 90,
         "use_aux_features": true,
-        "label_smoothing": 0.03,
-        "weight_decay": 0.035,
+        "label_smoothing": 0.0,
+        "weight_decay": 0.03,
         "model": {
-          "aux_hidden_dim": 128,
-          "dropout": 0.20
+          "dropout": 0.18,
+          "aux_hidden_dim": 128
         }
       }
     },
     {
-      "name": "aux_features_no_mask_channels",
+      "name": "C05_aux_features_small_branch",
+      "reason": "Tests whether the auxiliary branch was too strong/noisy by reducing its hidden dimension.",
+      "overrides": {
+        "epochs": 90,
+        "use_aux_features": true,
+        "label_smoothing": 0.0,
+        "weight_decay": 0.03,
+        "model": {
+          "dropout": 0.18,
+          "aux_hidden_dim": 32
+        }
+      }
+    },
+    {
+      "name": "C06_aux_features_no_mask_channels",
+      "reason": "Checks whether explicit feature summaries can replace valid-mask channels, reducing input size.",
       "overrides": {
         "epochs": 90,
         "use_aux_features": true,
         "include_valid_mask_as_channels": false,
-        "label_smoothing": 0.03,
+        "label_smoothing": 0.0,
+        "weight_decay": 0.03,
         "model": {
           "in_channels": 12,
-          "aux_hidden_dim": 128,
-          "dropout": 0.20
+          "dropout": 0.18,
+          "aux_hidden_dim": 128
         }
       }
     },
     {
-      "name": "strong_regularization_aux",
-      "overrides": {
-        "epochs": 100,
-        "use_aux_features": true,
-        "label_smoothing": 0.05,
-        "weight_decay": 0.05,
-        "learning_rate": 0.0002,
-        "model": {
-          "aux_hidden_dim": 160,
-          "dropout": 0.25
-        }
-      }
-    },
-    {
-      "name": "no_query_date_ablation",
+      "name": "C07_no_query_date_ablation",
+      "reason": "Measures how much the model depends on the requested query date.",
       "flags": [
         "--no-query-date"
       ],
       "overrides": {
-        "epochs": 40
+        "epochs": 40,
+        "label_smoothing": 0.0
       }
     },
     {
-      "name": "no_time_date_ablation",
+      "name": "C08_no_time_date_ablation",
+      "reason": "Measures how much the model depends on acquisition-date encoding.",
       "flags": [
         "--no-time-date"
       ],
       "overrides": {
-        "epochs": 40
+        "epochs": 40,
+        "label_smoothing": 0.0
       }
     },
     {
-      "name": "shuffle_labels_sanity",
+      "name": "C09_shuffle_labels_sanity",
+      "reason": "Must fail; if it performs well, validation is leaking labels or dates.",
       "flags": [
         "--shuffle-labels"
       ],
       "overrides": {
         "epochs": 8,
-        "early_stopping_patience": null
+        "early_stopping_patience": null,
+        "label_smoothing": 0.0
       }
     }
   ]

@@ -75,6 +75,7 @@ def config_summary(model_dir: Path) -> dict[str, Any]:
         return {}
     model_config = payload.get("model_config", {})
     train_config = payload.get("train_config", {})
+    git = payload.get("git", {})
     return {
         "use_query_doy": model_config.get("use_query_doy"),
         "use_time_doy": model_config.get("use_time_doy"),
@@ -84,6 +85,9 @@ def config_summary(model_dir: Path) -> dict[str, Any]:
         "label_smoothing": train_config.get("label_smoothing", 0.0),
         "weight_decay": train_config.get("weight_decay"),
         "output_dir": train_config.get("output_dir", str(model_dir)),
+        "git_commit": git.get("commit"),
+        "git_branch": git.get("branch"),
+        "git_dirty": git.get("dirty"),
     }
 
 
@@ -162,6 +166,8 @@ def print_markdown(rows: list[dict[str, Any]]) -> str:
         "use_time_doy",
         "in_channels",
         "aux_feature_dim",
+        "git_commit",
+        "git_dirty",
         "checkpoint_epoch",
     ]
     lines = ["|" + "|".join(columns) + "|", "|" + "|".join(["---"] * len(columns)) + "|"]
