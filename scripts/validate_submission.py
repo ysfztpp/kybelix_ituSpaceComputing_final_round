@@ -79,7 +79,7 @@ def main() -> None:
     except ImportError as exc:
         fail(f"PyTorch is required to validate the checkpoint: {exc}")
 
-    payload = torch.load(checkpoint, map_location="cpu")
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
     for key in ["model_config", "model_state_dict"]:
         if key not in payload:
             fail(f"checkpoint missing key: {key}")

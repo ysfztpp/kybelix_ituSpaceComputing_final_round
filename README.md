@@ -1,27 +1,30 @@
 # Kybelix ITU Space Computing Final Round
 
-This repository is now intentionally simple. It focuses on one training workflow:
+Clean, reproducible Track 1 remote-sensing project for:
 
 ```text
-raw Sentinel-2 TIFFs + point labels -> 15x15 patch dataset -> audit -> CNN + Transformer
+raw Sentinel-2 TIFFs + point/date rows -> 15x15 patch time series -> CNN + Transformer -> result.json
 ```
 
-Submission/Docker files were removed for now because we first need to understand the data and the suspicious training results.
+The repository now contains both the research/training pipeline and a tested inference package.
 
-## What The PDFs Say
+## Current Status
 
-`Space Intelligence Empowering Zero Hunger Track_Task Description of Final Round_en.pdf` defines the data and scoring:
+Successful platform test:
 
-- Training labels are rows with `point_id`, `Longitude`, `Latitude`, `phenophase_date`, `crop_type`, `phenophase_name`.
-- The target is crop type plus phenophase stage for point-date rows.
-- Crop score uses macro-F1 over `corn`, `rice`, `soybean`.
-- Rice phenology score uses strict crop+stage exact matching for rice samples.
+```text
+job id: jb-aitrain-155347848884412160
+submitted commit: 28d94fb
+output file: /mnt/si000886fq1w/default/output/result.json
+runtime result rows: 930
+runtime query rows: 942
+```
 
-`Round2 Project Submission Manual_en_0407.pdf` says the final platform is inference-only, but we are not focusing on submission files right now.
+The model ran on CPU in the successful submission because the large CUDA PyTorch image exceeded the project build timeout. CPU inference completed successfully.
 
 ## Important Finding
 
-The model looked too good because phenophase stage is almost predictable from date alone.
+Phenophase stage is strongly date-driven in this dataset.
 
 Current audit result:
 
@@ -30,17 +33,17 @@ date-only rice stage accuracy: 1.0
 date-only all-crop stage accuracy: 0.934
 ```
 
-This means near-zero stage loss is not reliable evidence that the model learned phenology from image pixels. It is mostly learning calendar timing. This is not a code crash or train/val region overlap issue; it is a dataset/label-design issue.
+So very high stage performance is not proof that the model learned phenology only from pixels. The query date is an important competition input and is used by the submission model.
 
-## Current Data
+## Main Dataset
 
-Main artifact:
+Main training artifact:
 
 ```text
 artifacts/patches_clean/train_cnn_transformer_15x15.npz
 ```
 
-Main tensor:
+Patch tensor schema:
 
 ```text
 patches: [N, T, 12, 15, 15]
@@ -50,158 +53,148 @@ Meaning:
 
 ```text
 N = sample point
-T = acquisition dates
+T = Sentinel-2 acquisition dates
 12 = Sentinel-2 bands
 15x15 = image patch
 ```
 
-The dataset also contains masks, dates, coordinates, crop labels, and phenophase DOY labels.
-
-Known current facts:
+Known data facts:
 
 ```text
 samples: 778
 patch shape: [778, 29, 12, 15, 15]
-observed valid pixel ratio, excluding padded timesteps: about 0.923
-valid-ratio-only crop macro-F1: about 0.370
+observed valid pixel ratio excluding padded timesteps: about 0.923
+observed invalid pixel ratio excluding padded timesteps: about 0.0768
 train/val point overlap: 0
 train/val region overlap: 0
 ```
 
-## Simple Commands
+## Submission Files
 
-Build/rebuild the dataset:
+The inference package uses:
+
+```text
+run.sh
+inference.py
+scripts/submission_inference.py
+scripts/validate_submission.py
+configs/submission.json
+checkpoints/model.pt
+artifacts/normalization/train_patch_band_stats.json
+```
+
+Runtime input expected by the platform:
+
+```text
+/input/test_point.csv or /input/points_test.csv
+/input/region_test/*.tiff
+```
+
+Runtime output:
+
+```text
+${OUTPUT_DIR}/result.json
+```
+
+If `OUTPUT_DIR` is not set, local fallback is:
+
+```text
+/output/result.json
+```
+
+The submission logs include:
+
+```text
+Python and torch version
+CUDA availability and device count
+input/output paths
+checkpoint metadata
+patch extraction report
+query rows vs unique output keys
+duplicate output-key counts
+crop/stage prediction counts
+sample result rows
+```
+
+
+## Dependencies
+
+For submission/inference image:
+
+```bash
+pip install -r requirements.txt
+```
+
+For local training and reports:
+
+```bash
+pip install -r requirements-train.txt
+```
+
+The Dockerfile installs CPU PyTorch separately to avoid the large CUDA image build timeout.
+
+## Commands
+
+Validate the submission package:
+
+```bash
+python3 scripts/validate_submission.py
+```
+
+Run local inference with platform-like folders:
+
+```bash
+INPUT_ROOT=/path/to/input OUTPUT_DIR=/path/to/output ./run.sh
+```
+
+Build/rebuild the training dataset:
 
 ```bash
 python3 scripts/preprocess.py --config configs/preprocess.json
 ```
 
-Audit the dataset and leakage risks:
+Audit data and leakage risks:
 
 ```bash
 python3 scripts/audit.py
 ```
 
-Train the CNN+Transformer with query date enabled:
+Train the main CNN+Transformer:
 
 ```bash
 python3 scripts/train.py --config configs/train.json
 ```
 
-Run the important no-date ablation:
+Train the stronger submission configuration:
+
+```bash
+python3 scripts/train.py --config configs/train_submission_date.json
+```
+
+Run the no-query-date ablation:
 
 ```bash
 python3 scripts/train.py --config configs/train.json --no-query-date
 ```
 
-If the no-date model performs much worse on rice stage, then the original stage result was calendar-driven.
-
-## Current File Structure
+## Repository Structure
 
 ```text
-configs/preprocess.json       one preprocessing config
-configs/train.json            one training config
-scripts/preprocess.py         builds the patch dataset
-scripts/audit.py              checks data, split, date-only baseline, leakage risks
-scripts/train.py              trains the single CNN+Transformer model
-preprocessing/                reusable TIFF/patch/mapping code
-data/query_dataset_npz.py     PyTorch dataset for point-date rows
-models/                       CNN encoder + temporal Transformer
-training/query_engine.py      training loop and metrics
-artifacts/                    compact data, splits, stats, generated model outputs
+configs/                  preprocessing, training, and submission configs
+data/                     PyTorch datasets and transforms
+models/                   CNN encoder + temporal Transformer
+preprocessing/            TIFF inventory, point mapping, patch extraction
+scripts/                  preprocess, audit, train, inference, validation
+training/                 training loop and metrics
+artifacts/normalization/  train-only normalization stats
+artifacts/patches_clean/  compact training NPZ artifact
+checkpoints/model.pt      trained submission checkpoint
+run.sh                    platform entrypoint
+inference.py              root inference wrapper
 ```
 
+## Notes
 
-Important mask clarification:
-
-```text
-observed valid pixel ratio excluding padding: 0.923
-observed invalid pixel ratio excluding padding: 0.0768
-all-array valid ratio including padded timesteps: 0.566
-padding pixel ratio of NPZ array: 0.3865
-full-invalid observed band-patches: 12,564
-perfect observed band-patches: 152,902
-partial-invalid observed band-patches: 631
-```
-
-The `0.566` number is not the real invalid-pixel rate. It counts padded timesteps as invalid. Use the observed-only ratio from `scripts/audit.py`.
-
-## How To Interpret Training
-
-Do not only look at loss.
-
-Use these checks:
-
-1. Compare normal training with `--no-query-date`.
-2. Compare model stage metrics with `scripts/audit.py` date-only baseline.
-3. Watch crop macro-F1, not only crop accuracy.
-4. Remember that each point is expanded into 7 query rows, so crop examples are repeated 7 times.
-5. Do not confuse padded timesteps with invalid observed pixels. The observed invalid-pixel ratio is about 7.68%; the lower 0.566 array ratio only happens if padded timesteps are counted as invalid.
-
-Checkpoint behavior:
-
-```text
-save_best_only=true saves the best validation checkpoint, not necessarily the last epoch.
-training/query_engine.py logs the learning rate actually used during each epoch.
-submission configs can select by val_competition_score and break ties with val_loss.
-```
-
-## Next Model Direction
-
-Keep one main model for now:
-
-```text
-CNN encoder per date -> Transformer over time -> crop head + stage head
-```
-
-Only add LSTM/RNN or other models after the audit proves whether the current issue is data/date leakage or model behavior.
-
-
-## 1-epoch smoke test
-
-Normal model with query date, CPU smoke run:
-
-```text
-val_crop_macro_f1: 0.999
-val_rice_stage_macro_f1: 0.120
-```
-
-No-date ablation, CPU smoke run:
-
-```text
-val_crop_macro_f1: 0.995
-val_rice_stage_macro_f1: 0.090
-```
-
-Interpretation: after only 1 epoch, crop is already very easy for the CNN+Transformer, while stage is still poor. The previous very high stage score after many epochs should be compared against the date-only baseline before trusting it.
-
-## Fast Date/Leakage Tests
-
-Run quick sanity experiments:
-
-```bash
-python3 scripts/run_fast_checks.py --epochs 1 --python .venv/bin/python
-```
-
-Or run individually:
-
-```bash
-python3 scripts/train.py --config configs/train_fast.json --epochs 1
-python3 scripts/train.py --config configs/train_fast.json --epochs 1 --no-query-date
-python3 scripts/train.py --config configs/train_fast.json --epochs 1 --no-query-date --no-time-date
-python3 scripts/train.py --config configs/train_fast.json --epochs 1 --shuffle-labels
-```
-
-Current one-epoch CPU fast-model result:
-
-```text
-normal_dates val_crop_macro_f1: 0.995
-normal_dates val_rice_stage_macro_f1: 0.410
-no_query_date val_crop_macro_f1: 0.995
-no_query_date val_rice_stage_macro_f1: 0.064
-no_query_or_time_date val_crop_macro_f1: 0.989
-no_query_or_time_date val_rice_stage_macro_f1: 0.042
-shuffled_train_labels val_crop_macro_f1: 0.120
-```
-
-Conclusion: query date is the main shortcut for phenophase stage. Crop does not appear to be a code-leakage artifact because shuffled train labels collapse validation crop macro-F1.
+- The submission Dockerfile intentionally uses a lightweight Python base image and CPU PyTorch to avoid the project build timeout.
+- Duplicate `Longitude_Latitude_Date` rows in test input collapse to one JSON key; the code logs duplicate counts and keeps the first deterministic prediction.
+- `.gitlab-ci.yml` in this GitHub repo is only a lightweight reference. The official GitLab project uses its own CI template.

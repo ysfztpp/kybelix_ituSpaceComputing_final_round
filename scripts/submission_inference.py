@@ -91,7 +91,7 @@ def read_query_rows(points_csv: Path, npz_arrays: dict[str, np.ndarray]) -> pd.D
 def load_model(checkpoint: Path, device: torch.device) -> QueryCNNTransformerClassifier:
     if not checkpoint.exists():
         raise FileNotFoundError(f"Missing trained checkpoint: {checkpoint}. Train in Colab and place it at checkpoints/model.pt before submitting.")
-    payload = torch.load(checkpoint, map_location=device)
+    payload = torch.load(checkpoint, map_location=device, weights_only=False)
     config = QueryCNNTransformerConfig(**payload["model_config"])
     model = QueryCNNTransformerClassifier(config)
     state = payload["model_state_dict"]
