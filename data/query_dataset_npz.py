@@ -82,6 +82,21 @@ class QueryDatePatchDataset(Dataset):
                 for row_index, (sample_index, _stage_index, query_doy, _crop_id, _stage_weight) in enumerate(rows)
             ]
         self.rows = rows
+        self._aux_features: np.ndarray | None = None
+        if self.use_aux_features:
+            self._aux_features = np.stack(
+                [
+                    compute_aux_features(
+                        self.arrays["patches"][sample_index],
+                        self.arrays["valid_pixel_mask"][sample_index],
+                        self.arrays["time_mask"][sample_index],
+                        self.arrays["time_doy"][sample_index],
+                        float(query_doy),
+                        self.bands,
+                    )
+                    for sample_index, _stage_index, query_doy, _crop_id, _stage_weight in self.rows
+                ]
+            ).astype(np.float32, copy=False)
 
     def _rice_class_id(self) -> int:
         names = self.arrays.get("crop_type_names")
@@ -116,13 +131,7 @@ class QueryDatePatchDataset(Dataset):
             "point_id": int(self.arrays["point_id"][sample_index]),
         }
         if self.use_aux_features:
-            aux_features = compute_aux_features(
-                raw_patches,
-                valid_pixel_mask,
-                self.arrays["time_mask"][sample_index],
-                self.arrays["time_doy"][sample_index],
-                float(query_doy),
-                self.bands,
-            )
-            sample["aux_features"] = torch.from_numpy(aux_features)
+            if self._aux_features is None:
+                raise RuntimeError("aux feature cache was not initialized")
+            sample["aux_features"] = torch.from_numpy(self._aux_features[item])
         return sample

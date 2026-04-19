@@ -23,7 +23,7 @@ from training.query_engine import run_query_epoch
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train the selected C03-style model on all labeled data for a fixed epoch count.")
+    parser = argparse.ArgumentParser(description="Train a selected query model on all labeled data for a fixed epoch count.")
     parser.add_argument("--config", type=Path, default=ROOT / "configs" / "train_full_data_c03_epoch75.json")
     parser.add_argument("--epochs", type=int, default=None, help="Override fixed epoch count. Use only for deliberate experiments.")
     return parser.parse_args()
@@ -51,7 +51,7 @@ def save_checkpoint(
             "best_val_loss": None,
             "history": history,
             "full_data_training": True,
-            "selection_rule": "Fixed epoch selected before training from prior validation: C00 and C03 both selected epoch 75.",
+            "selection_rule": str(payload.get("selection_rule", "Fixed epoch selected before full-data training.")),
         }
     )
     torch.save(checkpoint, output_dir / "model.pt")
@@ -63,8 +63,7 @@ def main() -> None:
     seed_everything(int(config.get("seed", 42)))
     device = select_device(str(config.get("device", "auto")))
 
-    if config.get("use_aux_features", False):
-        raise ValueError("Full-data C03 setup is intentionally baseline-only; use_aux_features must stay false/absent.")
+    use_aux_features = bool(config.get("use_aux_features", False))
 
     train_ds = QueryDatePatchDataset(
         npz_path=resolve_path(config["dataset_npz"]),
@@ -73,14 +72,15 @@ def main() -> None:
         normalization_json=resolve_path(config["normalization_json"]),
         rice_stage_loss_only=bool(config.get("rice_stage_loss_only", True)),
         include_valid_mask_as_channels=bool(config.get("include_valid_mask_as_channels", True)),
-        use_aux_features=False,
+        use_aux_features=use_aux_features,
     )
 
     model_config_data = dict(config.get("model", {}))
-    model_config_data["aux_feature_dim"] = 0
+    model_config_data["aux_feature_dim"] = int(train_ds.aux_feature_dim) if use_aux_features else 0
     model_config = QueryCNNTransformerConfig(**{key: value for key, value in model_config_data.items() if key in QueryCNNTransformerConfig.__annotations__})
-    if model_config.in_channels != 24 or not model_config.use_query_doy or not model_config.use_time_doy:
-        raise ValueError("Full-data C03 setup must keep 24 channels, query DOY, and acquisition DOY enabled.")
+    expected_channels = 24 if bool(config.get("include_valid_mask_as_channels", True)) else 12
+    if model_config.in_channels != expected_channels:
+        raise ValueError(f"model in_channels must be {expected_channels} for this full-data config, got {model_config.in_channels}")
 
     pin_memory = device.type == "cuda"
     train_loader = DataLoader(
@@ -108,8 +108,9 @@ def main() -> None:
         "train_config": config,
         "device": str(device),
         "task": "point_date_crop_stage_classification_full_data_fixed_epoch",
-        "aux_feature_names": [],
+        "aux_feature_names": train_ds.aux_feature_names,
         "git": git_metadata,
+        "selection_rule": str(config.get("selection_rule", "Fixed epoch selected before full-data training.")),
     }
 
     history: list[dict[str, Any]] = []
@@ -143,7 +144,7 @@ def main() -> None:
         "experiment": output_dir.name,
         "training_mode": "full_data_fixed_epoch",
         "epoch": epochs,
-        "selection_rule": "Epoch fixed before training from prior validation evidence: C00 and C03 both selected epoch 75.",
+        "selection_rule": str(config.get("selection_rule", "Fixed epoch selected before full-data training.")),
         "train_queries": len(train_ds),
         "final_train_competition_score": history[-1].get("train_competition_score") if history else None,
         "final_train_loss": history[-1].get("train_loss") if history else None,
