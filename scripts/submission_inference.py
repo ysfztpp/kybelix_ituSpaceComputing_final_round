@@ -238,6 +238,7 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
         "torch_cuda_device_count": int(torch.cuda.device_count()) if torch.cuda.is_available() else 0,
         "torch_cuda_device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
         "model_uses_mask_channels": bool(include_mask_channels),
+        "model_uses_aux_features": bool(int(model.config.aux_feature_dim) > 0),
         "result_stats": result_stats,
         "patch_report": report,
     }
