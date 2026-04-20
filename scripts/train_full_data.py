@@ -64,6 +64,7 @@ def main() -> None:
     device = select_device(str(config.get("device", "auto")))
 
     use_aux_features = bool(config.get("use_aux_features", False))
+    aux_feature_set = str(config.get("aux_feature_set", "summary"))
 
     train_ds = QueryDatePatchDataset(
         npz_path=resolve_path(config["dataset_npz"]),
@@ -73,6 +74,7 @@ def main() -> None:
         rice_stage_loss_only=bool(config.get("rice_stage_loss_only", True)),
         include_valid_mask_as_channels=bool(config.get("include_valid_mask_as_channels", True)),
         use_aux_features=use_aux_features,
+        aux_feature_set=aux_feature_set,
     )
 
     model_config_data = dict(config.get("model", {}))
@@ -109,6 +111,7 @@ def main() -> None:
         "device": str(device),
         "task": "point_date_crop_stage_classification_full_data_fixed_epoch",
         "aux_feature_names": train_ds.aux_feature_names,
+        "aux_feature_set": aux_feature_set if use_aux_features else None,
         "git": git_metadata,
         "selection_rule": str(config.get("selection_rule", "Fixed epoch selected before full-data training.")),
     }

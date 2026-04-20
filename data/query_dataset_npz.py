@@ -35,6 +35,7 @@ class QueryDatePatchDataset(Dataset):
         shuffle_labels_seed: int | None = None,
         include_valid_mask_as_channels: bool = False,
         use_aux_features: bool = False,
+        aux_feature_set: str = "summary",
     ) -> None:
         if torch is None:
             raise ImportError("torch is required for QueryDatePatchDataset. Install PyTorch before training.")
@@ -52,8 +53,9 @@ class QueryDatePatchDataset(Dataset):
         self.rice_stage_loss_only = bool(rice_stage_loss_only)
         self.include_valid_mask_as_channels = bool(include_valid_mask_as_channels)
         self.use_aux_features = bool(use_aux_features)
+        self.aux_feature_set = str(aux_feature_set)
         self.bands = self.arrays.get("bands", np.asarray([f"B{i:02d}" for i in range(1, self.arrays["patches"].shape[2] + 1)])).astype(str).tolist()
-        self.aux_feature_names = aux_feature_names(self.bands) if self.use_aux_features else []
+        self.aux_feature_names = aux_feature_names(self.bands, feature_set=self.aux_feature_set) if self.use_aux_features else []
         self.aux_feature_dim = len(self.aux_feature_names)
         rice_id = self._rice_class_id()
 
@@ -93,6 +95,7 @@ class QueryDatePatchDataset(Dataset):
                         self.arrays["time_doy"][sample_index],
                         float(query_doy),
                         self.bands,
+                        feature_set=self.aux_feature_set,
                     )
                     for sample_index, _stage_index, query_doy, _crop_id, _stage_weight in self.rows
                 ]

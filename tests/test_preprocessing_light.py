@@ -105,6 +105,10 @@ def test_aux_features() -> None:
     features = compute_aux_features(patches, valid, time_mask, time_doy, query_doy=120, bands=bands)
     assert features.shape == (aux_feature_dim(bands),)
     assert np.isfinite(features).all()
+    phenology_features = compute_aux_features(patches, valid, time_mask, time_doy, query_doy=120, bands=bands, feature_set="phenology")
+    assert phenology_features.shape == (aux_feature_dim(bands, feature_set="phenology"),)
+    assert phenology_features.shape[0] > features.shape[0]
+    assert np.isfinite(phenology_features).all()
 
 
 def main() -> None:

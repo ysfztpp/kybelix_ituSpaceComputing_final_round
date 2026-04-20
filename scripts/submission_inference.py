@@ -99,6 +99,8 @@ def load_model(checkpoint: Path, device: torch.device) -> QueryCNNTransformerCla
     if any(key.startswith("_orig_mod.") for key in state):
         state = {key.removeprefix("_orig_mod."): value for key, value in state.items()}
     model.load_state_dict(state)
+    train_config = payload.get("train_config", {})
+    model.aux_feature_set = str(payload.get("aux_feature_set") or train_config.get("aux_feature_set", "summary"))
     model.to(device)
     model.eval()
     return model
@@ -211,6 +213,7 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
                         arrays["time_doy"][sample_index],
                         float(query_doy),
                         bands,
+                        feature_set=str(getattr(model, "aux_feature_set", "summary")),
                     )
                     for sample_index, query_doy in zip(indices, query_doys[start:end])
                 ]

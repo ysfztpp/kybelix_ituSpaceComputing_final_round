@@ -11,7 +11,22 @@ STAT_NAMES = ("median", "std", "min", "max", "amplitude", "valid_ratio")
 EPS = 1e-6
 
 
-def aux_feature_names(bands: Sequence[str] = DEFAULT_BANDS) -> list[str]:
+def _normalise_feature_set(feature_set: str) -> str:
+    value = str(feature_set or "summary").strip().lower()
+    aliases = {
+        "c04": "summary",
+        "summary": "summary",
+        "default": "summary",
+        "c05": "phenology",
+        "phenology": "phenology",
+        "phenology_aux": "phenology",
+    }
+    if value not in aliases:
+        raise ValueError(f"unknown aux feature set {feature_set!r}; expected one of {sorted(set(aliases))}")
+    return aliases[value]
+
+
+def _summary_feature_names(bands: Sequence[str]) -> list[str]:
     names: list[str] = []
     for band in bands:
         names.extend([f"band_{band.lower()}_{stat}" for stat in STAT_NAMES])
@@ -23,8 +38,45 @@ def aux_feature_names(bands: Sequence[str] = DEFAULT_BANDS) -> list[str]:
     return names
 
 
-def aux_feature_dim(bands: Sequence[str] = DEFAULT_BANDS) -> int:
-    return len(aux_feature_names(bands))
+def _phenology_feature_names() -> list[str]:
+    names = [
+        "query_minus_nearest_image_doy_scaled",
+        "query_minus_first_image_doy_scaled",
+        "query_minus_last_image_doy_scaled",
+        "query_minus_estimated_ndvi_peak_doy_scaled",
+        "query_minus_estimated_ndvi_greenup_doy_scaled",
+        "query_minus_estimated_ndvi_senescence_doy_scaled",
+        "relative_position_in_ndvi_season",
+        "ndvi_query_minus_min_doy_scaled",
+        "ndvi_gap_to_max",
+        "ndvi_gap_to_min",
+    ]
+    for index_name in INDEX_NAMES:
+        names.extend(
+            [
+                f"{index_name}_interp_at_query",
+                f"{index_name}_nearest_to_query",
+                f"{index_name}_max_value",
+                f"{index_name}_min_value",
+                f"{index_name}_amplitude",
+                f"{index_name}_max_doy_scaled",
+                f"{index_name}_query_minus_max_doy_scaled",
+                f"{index_name}_slope_before_query_30d",
+                f"{index_name}_slope_after_query_30d",
+            ]
+        )
+    return names
+
+
+def aux_feature_names(bands: Sequence[str] = DEFAULT_BANDS, feature_set: str = "summary") -> list[str]:
+    names = _summary_feature_names(bands)
+    if _normalise_feature_set(feature_set) == "phenology":
+        names.extend(_phenology_feature_names())
+    return names
+
+
+def aux_feature_dim(bands: Sequence[str] = DEFAULT_BANDS, feature_set: str = "summary") -> int:
+    return len(aux_feature_names(bands, feature_set=feature_set))
 
 
 def _safe_divide(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
@@ -88,6 +140,147 @@ def _index_series(band_series: np.ndarray, band_to_index: dict[str, int]) -> dic
     }
 
 
+def _day_delta_scaled(query_doy: float, event_doy: float) -> float:
+    if not np.isfinite(event_doy):
+        return 0.0
+    return float(np.clip((query_doy - event_doy) / 366.0, -2.0, 2.0))
+
+
+def _valid_curve(series: np.ndarray, time_doy: np.ndarray, time_mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    doys = time_doy.astype(np.float32, copy=False)
+    values = series.astype(np.float32, copy=False)
+    valid = time_mask.astype(bool) & np.isfinite(doys) & (doys > 0) & np.isfinite(values)
+    if not valid.any():
+        return np.asarray([], dtype=np.float32), np.asarray([], dtype=np.float32)
+    valid_doys = doys[valid]
+    valid_values = values[valid]
+    order = np.argsort(valid_doys)
+    return valid_doys[order], valid_values[order]
+
+
+def _interp_at_query(doys: np.ndarray, values: np.ndarray, query_doy: float) -> float:
+    if doys.size == 0:
+        return 0.0
+    if doys.size == 1:
+        return float(values[0])
+    return float(np.interp(query_doy, doys, values))
+
+
+def _nearest_curve_value(doys: np.ndarray, values: np.ndarray, query_doy: float) -> tuple[float, float]:
+    if doys.size == 0:
+        return 0.0, query_doy
+    nearest_index = int(np.argmin(np.abs(doys - query_doy)))
+    return float(values[nearest_index]), float(doys[nearest_index])
+
+
+def _slope_30d(doys: np.ndarray, values: np.ndarray, query_doy: float, side: str) -> float:
+    if doys.size < 2:
+        return 0.0
+    if side == "before":
+        candidates = np.where(doys <= query_doy)[0]
+        if candidates.size >= 2:
+            first, second = int(candidates[-2]), int(candidates[-1])
+        else:
+            first, second = 0, 1
+    elif side == "after":
+        candidates = np.where(doys >= query_doy)[0]
+        if candidates.size >= 2:
+            first, second = int(candidates[0]), int(candidates[1])
+        else:
+            first, second = doys.size - 2, doys.size - 1
+    else:
+        raise ValueError("side must be before or after")
+    delta_days = float(doys[second] - doys[first])
+    if abs(delta_days) <= EPS:
+        return 0.0
+    return float(np.clip(((float(values[second]) - float(values[first])) / delta_days) * 30.0, -5.0, 5.0))
+
+
+def _ndvi_event_doys(doys: np.ndarray, ndvi: np.ndarray, query_doy: float) -> tuple[float, float, float, float]:
+    if doys.size == 0:
+        return query_doy, query_doy, query_doy, query_doy
+    peak_index = int(np.argmax(ndvi))
+    min_index = int(np.argmin(ndvi))
+    min_value = float(np.min(ndvi))
+    max_value = float(np.max(ndvi))
+    amplitude = max_value - min_value
+    if amplitude <= EPS:
+        return float(doys[peak_index]), float(doys[0]), float(doys[-1]), float(doys[min_index])
+
+    greenup_threshold = min_value + 0.20 * amplitude
+    senescence_threshold = min_value + 0.50 * amplitude
+
+    before_peak = np.arange(0, peak_index + 1)
+    green_candidates = before_peak[ndvi[before_peak] >= greenup_threshold]
+    greenup_doy = float(doys[int(green_candidates[0])]) if green_candidates.size else float(doys[0])
+
+    after_peak = np.arange(peak_index, doys.size)
+    sen_candidates = after_peak[ndvi[after_peak] <= senescence_threshold]
+    senescence_doy = float(doys[int(sen_candidates[0])]) if sen_candidates.size else float(doys[-1])
+    if senescence_doy <= greenup_doy:
+        senescence_doy = float(doys[-1])
+
+    return float(doys[peak_index]), greenup_doy, senescence_doy, float(doys[min_index])
+
+
+def _phenology_features(indices: dict[str, np.ndarray], time_doy: np.ndarray, time_mask: np.ndarray, query_doy: float) -> list[float]:
+    valid_times = np.where(time_mask.astype(bool) & np.isfinite(time_doy.astype(np.float32)) & (time_doy.astype(np.float32) > 0))[0]
+    if valid_times.size:
+        valid_doys = time_doy[valid_times].astype(np.float32)
+        nearest_image_doy = float(valid_doys[int(np.argmin(np.abs(valid_doys - query_doy)))])
+        first_image_doy = float(np.min(valid_doys))
+        last_image_doy = float(np.max(valid_doys))
+    else:
+        nearest_image_doy = first_image_doy = last_image_doy = query_doy
+
+    ndvi_doys, ndvi_values = _valid_curve(indices["ndvi"], time_doy, time_mask)
+    ndvi_peak_doy, greenup_doy, senescence_doy, ndvi_min_doy = _ndvi_event_doys(ndvi_doys, ndvi_values, query_doy)
+    season_span = max(senescence_doy - greenup_doy, 1.0)
+    relative_position = float(np.clip((query_doy - greenup_doy) / season_span, -1.0, 2.0))
+    ndvi_interp = _interp_at_query(ndvi_doys, ndvi_values, query_doy)
+    ndvi_max = float(np.max(ndvi_values)) if ndvi_values.size else 0.0
+    ndvi_min = float(np.min(ndvi_values)) if ndvi_values.size else 0.0
+
+    features: list[float] = [
+        _day_delta_scaled(query_doy, nearest_image_doy),
+        _day_delta_scaled(query_doy, first_image_doy),
+        _day_delta_scaled(query_doy, last_image_doy),
+        _day_delta_scaled(query_doy, ndvi_peak_doy),
+        _day_delta_scaled(query_doy, greenup_doy),
+        _day_delta_scaled(query_doy, senescence_doy),
+        relative_position,
+        _day_delta_scaled(query_doy, ndvi_min_doy),
+        float(np.clip(ndvi_max - ndvi_interp, -5.0, 5.0)),
+        float(np.clip(ndvi_interp - ndvi_min, -5.0, 5.0)),
+    ]
+
+    for index_name in INDEX_NAMES:
+        doys, values = _valid_curve(indices[index_name], time_doy, time_mask)
+        interp = _interp_at_query(doys, values, query_doy)
+        nearest, _nearest_doy = _nearest_curve_value(doys, values, query_doy)
+        if values.size:
+            max_index = int(np.argmax(values))
+            max_value = float(values[max_index])
+            min_value = float(np.min(values))
+            max_doy = float(doys[max_index])
+        else:
+            max_value = min_value = max_doy = 0.0
+        features.extend(
+            [
+                float(np.clip(interp, -5.0, 5.0)),
+                float(np.clip(nearest, -5.0, 5.0)),
+                float(np.clip(max_value, -5.0, 5.0)),
+                float(np.clip(min_value, -5.0, 5.0)),
+                float(np.clip(max_value - min_value, 0.0, 5.0)),
+                float(np.clip(max_doy / 366.0, 0.0, 1.0)) if max_doy > 0 else 0.0,
+                _day_delta_scaled(query_doy, max_doy),
+                _slope_30d(doys, values, query_doy, "before"),
+                _slope_30d(doys, values, query_doy, "after"),
+            ]
+        )
+    return features
+
+
 def compute_aux_features(
     patches: np.ndarray,
     valid_pixel_mask: np.ndarray,
@@ -95,6 +288,7 @@ def compute_aux_features(
     time_doy: np.ndarray,
     query_doy: float,
     bands: Sequence[str] = DEFAULT_BANDS,
+    feature_set: str = "summary",
 ) -> np.ndarray:
     """Build compact phenology/spectral features from the raw patch time series.
 
@@ -135,9 +329,11 @@ def compute_aux_features(
     features.append(delta_scaled)
     features.extend(np.nan_to_num(nearest_bands, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32).tolist())
     features.extend(np.nan_to_num(np.asarray(nearest_indices, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0).tolist())
+    if _normalise_feature_set(feature_set) == "phenology":
+        features.extend(_phenology_features(indices, time_doy.astype(np.float32, copy=False), time_mask_bool, query_value))
 
     out = np.asarray(features, dtype=np.float32)
-    expected = aux_feature_dim(bands)
+    expected = aux_feature_dim(bands, feature_set=feature_set)
     if out.shape[0] != expected:
         raise RuntimeError(f"aux feature dimension mismatch: got {out.shape[0]}, expected {expected}")
     return out

@@ -1,0 +1,44 @@
+{
+  "name": "modeldev_c05_and_deep_baselines",
+  "base_config": "configs/train_submission_date.json",
+  "output_root": "artifacts/models/experiments/modeldev_c05_and_deep_baselines",
+  "experiments": [
+    {
+      "name": "C05_phenology_aux_features",
+      "reason": "Tests whether query-relative vegetation-curve features improve rice phenophase beyond C04 summary aux features.",
+      "overrides": {
+        "epochs": 90,
+        "batch_size": 128,
+        "learning_rate": 0.00025,
+        "weight_decay": 0.03,
+        "num_workers": 4,
+        "early_stopping_patience": 12,
+        "use_aux_features": true,
+        "aux_feature_set": "phenology",
+        "label_smoothing": 0.0,
+        "model": {
+          "dropout": 0.18,
+          "aux_hidden_dim": 128
+        }
+      }
+    },
+    {
+      "name": "C10_deep_c03_x2_transformer",
+      "reason": "Tests a roughly twice-deep C03-style baseline by increasing Transformer layers from 4 to 8 while keeping the same input signals.",
+      "overrides": {
+        "epochs": 100,
+        "batch_size": 256,
+        "learning_rate": 0.0003,
+        "weight_decay": 0.03,
+        "num_workers": 4,
+        "early_stopping_patience": 14,
+        "use_aux_features": false,
+        "label_smoothing": 0.0,
+        "model": {
+          "transformer_layers": 8,
+          "dropout": 0.2
+        }
+      }
+    }
+  ]
+}

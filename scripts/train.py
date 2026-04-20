@@ -210,6 +210,7 @@ def main() -> None:
     if args.shuffle_labels and not preserve_output_dir:
         config["output_dir"] = str(config.get("output_dir", "artifacts/models/cnn_transformer")) + "_shuffled_labels"
     use_aux_features = bool(config.get("use_aux_features", False))
+    aux_feature_set = str(config.get("aux_feature_set", "summary"))
 
     train_ds = QueryDatePatchDataset(
         npz_path=resolve_path(config["dataset_npz"]),
@@ -220,6 +221,7 @@ def main() -> None:
         shuffle_labels_seed=int(config.get("seed", 42)) if args.shuffle_labels else None,
         include_valid_mask_as_channels=bool(config.get("include_valid_mask_as_channels", False)),
         use_aux_features=use_aux_features,
+        aux_feature_set=aux_feature_set,
     )
     val_ds = QueryDatePatchDataset(
         npz_path=resolve_path(config["dataset_npz"]),
@@ -229,6 +231,7 @@ def main() -> None:
         rice_stage_loss_only=bool(config.get("rice_stage_loss_only", True)),
         include_valid_mask_as_channels=bool(config.get("include_valid_mask_as_channels", False)),
         use_aux_features=use_aux_features,
+        aux_feature_set=aux_feature_set,
     )
     if use_aux_features:
         model_config_data["aux_feature_dim"] = int(train_ds.aux_feature_dim)
@@ -253,6 +256,7 @@ def main() -> None:
         "device": str(device),
         "task": "point_date_crop_stage_classification",
         "aux_feature_names": train_ds.aux_feature_names,
+        "aux_feature_set": aux_feature_set if use_aux_features else None,
         "git": git_metadata,
     }
     history = fit_query(
