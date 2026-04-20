@@ -39,6 +39,26 @@
           "dropout": 0.2
         }
       }
+    },
+    {
+      "name": "C11_stage_only_phenology_light_aux",
+      "reason": "Tests a smaller stage-only phenology auxiliary branch to avoid the shared-aux interference seen in C05.",
+      "overrides": {
+        "epochs": 90,
+        "batch_size": 256,
+        "learning_rate": 0.0003,
+        "weight_decay": 0.03,
+        "num_workers": 4,
+        "early_stopping_patience": 14,
+        "use_aux_features": true,
+        "aux_feature_set": "phenology_light",
+        "label_smoothing": 0.0,
+        "model": {
+          "dropout": 0.18,
+          "aux_hidden_dim": 64,
+          "aux_target": "stage_only"
+        }
+      }
     }
   ]
 }

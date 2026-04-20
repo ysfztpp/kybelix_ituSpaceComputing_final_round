@@ -114,6 +114,49 @@ def prepare_patches(arrays: dict[str, np.ndarray], indices: np.ndarray, normaliz
     return patches.astype(np.float32, copy=False)
 
 
+def prepare_model_batch(
+    *,
+    model: QueryCNNTransformerClassifier,
+    arrays: dict[str, np.ndarray],
+    indices: np.ndarray,
+    query_doys: np.ndarray,
+    normalizer: NpzPatchNormalizer,
+    device: torch.device,
+) -> dict[str, torch.Tensor]:
+    include_mask_channels = int(model.config.in_channels) == 24
+    patches = prepare_patches(arrays, indices, normalizer, include_mask_channels)
+    batch = {
+        "patches": torch.from_numpy(patches).to(device),
+        "time_mask": torch.from_numpy(arrays["time_mask"][indices].astype(bool)).to(device),
+        "time_doy": torch.from_numpy(arrays["time_doy"][indices].astype(np.float32)).to(device),
+        "query_doy": torch.from_numpy(query_doys.astype(np.float32, copy=False)).to(device),
+    }
+    if int(model.config.aux_feature_dim) > 0:
+        bands = arrays.get("bands", np.asarray(BAND_ORDER)).astype(str).tolist()
+        aux = np.stack(
+            [
+                compute_aux_features(
+                    arrays["patches"][sample_index],
+                    arrays["valid_pixel_mask"][sample_index],
+                    arrays["time_mask"][sample_index],
+                    arrays["time_doy"][sample_index],
+                    float(query_doy),
+                    bands,
+                    feature_set=str(getattr(model, "aux_feature_set", "summary")),
+                )
+                for sample_index, query_doy in zip(indices, query_doys)
+            ]
+        )
+        if aux.shape[1] != int(model.config.aux_feature_dim):
+            raise ValueError(f"aux feature dimension mismatch: model expects {model.config.aux_feature_dim}, computed {aux.shape[1]}")
+        batch["aux_features"] = torch.from_numpy(aux.astype(np.float32, copy=False)).to(device)
+    return batch
+
+
+def forward_model(model: QueryCNNTransformerClassifier, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    return model(batch["patches"], batch["time_mask"], batch["time_doy"], batch["query_doy"], batch.get("aux_features"))
+
+
 def _count_names(values: np.ndarray, names: list[str]) -> dict[str, int]:
     counts = {name: 0 for name in names}
     for value in values:
@@ -180,8 +223,14 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
     )
 
     device = select_device(str(config.get("device", "auto")))
-    model = load_model(resolve_path(config.get("checkpoint", "checkpoints/model.pt")), device)
-    include_mask_channels = int(model.config.in_channels) == 24
+    default_checkpoint = resolve_path(config.get("checkpoint", "checkpoints/model.pt"))
+    crop_checkpoint = resolve_path(config.get("crop_checkpoint", default_checkpoint))
+    stage_checkpoint = resolve_path(config.get("stage_checkpoint", default_checkpoint))
+    crop_model = load_model(crop_checkpoint, device)
+    if stage_checkpoint.resolve() == crop_checkpoint.resolve():
+        stage_model = crop_model
+    else:
+        stage_model = load_model(stage_checkpoint, device)
     normalizer = NpzPatchNormalizer(resolve_path(config.get("normalization_json", "artifacts/normalization/train_patch_band_stats.json")))
     with np.load(test_npz, allow_pickle=False) as npz:
         arrays = {name: npz[name] for name in npz.files}
@@ -195,36 +244,16 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
     for start in range(0, len(query_rows), batch_size):
         end = min(start + batch_size, len(query_rows))
         indices = sample_indices[start:end]
-        patches = prepare_patches(arrays, indices, normalizer, include_mask_channels)
-        batch = {
-            "patches": torch.from_numpy(patches).to(device),
-            "time_mask": torch.from_numpy(arrays["time_mask"][indices].astype(bool)).to(device),
-            "time_doy": torch.from_numpy(arrays["time_doy"][indices].astype(np.float32)).to(device),
-            "query_doy": torch.from_numpy(query_doys[start:end]).to(device),
-        }
-        if int(model.config.aux_feature_dim) > 0:
-            bands = arrays.get("bands", np.asarray(BAND_ORDER)).astype(str).tolist()
-            aux = np.stack(
-                [
-                    compute_aux_features(
-                        arrays["patches"][sample_index],
-                        arrays["valid_pixel_mask"][sample_index],
-                        arrays["time_mask"][sample_index],
-                        arrays["time_doy"][sample_index],
-                        float(query_doy),
-                        bands,
-                        feature_set=str(getattr(model, "aux_feature_set", "summary")),
-                    )
-                    for sample_index, query_doy in zip(indices, query_doys[start:end])
-                ]
-            )
-            if aux.shape[1] != int(model.config.aux_feature_dim):
-                raise ValueError(f"aux feature dimension mismatch: model expects {model.config.aux_feature_dim}, computed {aux.shape[1]}")
-            batch["aux_features"] = torch.from_numpy(aux.astype(np.float32, copy=False)).to(device)
+        crop_batch = prepare_model_batch(model=crop_model, arrays=arrays, indices=indices, query_doys=query_doys[start:end], normalizer=normalizer, device=device)
         with torch.no_grad():
-            outputs = model(batch["patches"], batch["time_mask"], batch["time_doy"], batch["query_doy"], batch.get("aux_features"))
-        crop_chunks.append(outputs["crop_logits"].argmax(dim=1).cpu().numpy())
-        stage_chunks.append(outputs["stage_logits"].argmax(dim=1).cpu().numpy())
+            crop_outputs = forward_model(crop_model, crop_batch)
+            if stage_model is crop_model:
+                stage_outputs = crop_outputs
+            else:
+                stage_batch = prepare_model_batch(model=stage_model, arrays=arrays, indices=indices, query_doys=query_doys[start:end], normalizer=normalizer, device=device)
+                stage_outputs = forward_model(stage_model, stage_batch)
+        crop_chunks.append(crop_outputs["crop_logits"].argmax(dim=1).cpu().numpy())
+        stage_chunks.append(stage_outputs["stage_logits"].argmax(dim=1).cpu().numpy())
 
     crop_pred = np.concatenate(crop_chunks)
     stage_pred = np.concatenate(stage_chunks)
@@ -240,8 +269,14 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
         "torch_cuda_available": bool(torch.cuda.is_available()),
         "torch_cuda_device_count": int(torch.cuda.device_count()) if torch.cuda.is_available() else 0,
         "torch_cuda_device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-        "model_uses_mask_channels": bool(include_mask_channels),
-        "model_uses_aux_features": bool(int(model.config.aux_feature_dim) > 0),
+        "crop_checkpoint": str(crop_checkpoint),
+        "stage_checkpoint": str(stage_checkpoint),
+        "crop_model_uses_mask_channels": bool(int(crop_model.config.in_channels) == 24),
+        "stage_model_uses_mask_channels": bool(int(stage_model.config.in_channels) == 24),
+        "crop_model_uses_aux_features": bool(int(crop_model.config.aux_feature_dim) > 0),
+        "stage_model_uses_aux_features": bool(int(stage_model.config.aux_feature_dim) > 0),
+        "model_uses_mask_channels": bool(int(crop_model.config.in_channels) == 24 or int(stage_model.config.in_channels) == 24),
+        "model_uses_aux_features": bool(int(crop_model.config.aux_feature_dim) > 0 or int(stage_model.config.aux_feature_dim) > 0),
         "result_stats": result_stats,
         "patch_report": report,
     }

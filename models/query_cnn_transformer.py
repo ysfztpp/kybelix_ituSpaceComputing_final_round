@@ -27,6 +27,7 @@ class QueryCNNTransformerConfig:
     use_time_doy: bool = True
     aux_feature_dim: int = 0
     aux_hidden_dim: int = 128
+    aux_target: str = "shared"
 
 
 class QueryCNNTransformerClassifier(nn.Module):
@@ -55,6 +56,10 @@ class QueryCNNTransformerClassifier(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=config.transformer_layers)
         self.pool = MaskedTemporalPool()
+        aux_target = str(config.aux_target or "shared").lower()
+        if aux_target not in {"shared", "stage_only", "crop_only"}:
+            raise ValueError("aux_target must be one of: shared, stage_only, crop_only")
+        self.aux_target = aux_target
         if config.aux_feature_dim > 0:
             # Auxiliary features are compact phenology/index summaries. They are
             # deliberately kept in a small side branch to avoid dominating the
@@ -70,9 +75,11 @@ class QueryCNNTransformerClassifier(nn.Module):
         else:
             self.aux_mlp = None
             aux_out_dim = 0
-        fused_dim = config.transformer_dim * 2 + aux_out_dim
-        self.crop_head = nn.Sequential(nn.LayerNorm(fused_dim), nn.Dropout(config.dropout), nn.Linear(fused_dim, config.num_crop_classes))
-        self.stage_head = nn.Sequential(nn.LayerNorm(fused_dim), nn.Dropout(config.dropout), nn.Linear(fused_dim, config.num_phenophase_classes))
+        base_dim = config.transformer_dim * 2
+        crop_dim = base_dim + aux_out_dim if aux_target in {"shared", "crop_only"} else base_dim
+        stage_dim = base_dim + aux_out_dim if aux_target in {"shared", "stage_only"} else base_dim
+        self.crop_head = nn.Sequential(nn.LayerNorm(crop_dim), nn.Dropout(config.dropout), nn.Linear(crop_dim, config.num_crop_classes))
+        self.stage_head = nn.Sequential(nn.LayerNorm(stage_dim), nn.Dropout(config.dropout), nn.Linear(stage_dim, config.num_phenophase_classes))
 
     def forward(
         self,
@@ -94,10 +101,15 @@ class QueryCNNTransformerClassifier(nn.Module):
             query = self.query_encoding(query_doy).reshape(batch_size, -1)
         else:
             query = torch.zeros_like(pooled)
-        pieces = [pooled, query]
+        base = torch.cat([pooled, query], dim=1)
+        crop_features = base
+        stage_features = base
         if self.aux_mlp is not None:
             if aux_features is None:
                 raise ValueError("aux_features must be provided when aux_feature_dim > 0")
-            pieces.append(self.aux_mlp(aux_features.float()))
-        fused = torch.cat(pieces, dim=1)
-        return {"crop_logits": self.crop_head(fused), "stage_logits": self.stage_head(fused)}
+            aux = self.aux_mlp(aux_features.float())
+            if self.aux_target in {"shared", "crop_only"}:
+                crop_features = torch.cat([crop_features, aux], dim=1)
+            if self.aux_target in {"shared", "stage_only"}:
+                stage_features = torch.cat([stage_features, aux], dim=1)
+        return {"crop_logits": self.crop_head(crop_features), "stage_logits": self.stage_head(stage_features)}

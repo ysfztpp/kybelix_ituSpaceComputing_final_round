@@ -1,0 +1,19 @@
+{
+  "input_root": "/input",
+  "output_json": "/output/result.json",
+  "checkpoint": "checkpoints/model.pt",
+  "crop_checkpoint": "checkpoints/crop_c04_model.pt",
+  "stage_checkpoint": "checkpoints/stage_c03_model.pt",
+  "normalization_json": "artifacts/normalization/train_patch_band_stats.json",
+  "work_dir": "/tmp/kybelix_submission_work",
+  "batch_size": 64,
+  "device": "auto",
+  "preprocessing": {
+    "patch_size": 15,
+    "bands": ["B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B09", "B11", "B12"],
+    "valid_min_exclusive": 0.0,
+    "valid_max_inclusive": 2.0,
+    "invalid_fill_value": 0.0
+  },
+  "selection_rule": "Hybrid 7A fallback: use the C04 aux model for crop labels and the C03 baseline model for phenophase labels."
+}
