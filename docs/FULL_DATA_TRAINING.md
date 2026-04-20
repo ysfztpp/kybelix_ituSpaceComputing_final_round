@@ -52,6 +52,13 @@ In Colab or the training GPU environment:
 python scripts/train_full_data.py --config configs/train_full_data_c03_epoch75.json
 ```
 
+For the C11 stage-phenology-light model, use the fixed epoch selected from the
+C11 validation run:
+
+```bash
+python scripts/train_full_data.py --config configs/train_full_data_c11_stage_phenology_light_epoch112.json
+```
+
 Expected output:
 
 ```text
@@ -71,6 +78,20 @@ python scripts/validate_submission.py
 ```
 
 Then submit the normal repository/package.
+
+For C11, prepare the GitLab submission repo from this project folder:
+
+```bash
+python scripts/prepare_c11_submission.py
+```
+
+This copies:
+
+- `artifacts/models/full_data_c11_stage_phenology_light_epoch112/model.pt` to the submission repo as `checkpoints/model.pt`
+- `configs/submission_c11_stage_phenology_light.json` to the submission repo as `configs/submission.json`
+- the matching aux-feature, model, inference, and validation code
+
+Then commit and push the GitLab submission repo only after validating the copied files.
 
 ## What To Watch While Training
 
