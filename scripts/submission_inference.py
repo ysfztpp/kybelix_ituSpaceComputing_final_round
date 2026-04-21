@@ -17,6 +17,7 @@ from data.transforms import NpzPatchNormalizer
 from models.query_cnn_transformer import QueryCNNTransformerClassifier, QueryCNNTransformerConfig
 from preprocessing.constants import BAND_ORDER, INVALID_FILL_VALUE, PATCH_SIZE
 from preprocessing.dataset import build_patch_dataset
+from training.stage_decoding import maybe_decode_stages
 
 try:
     import torch
@@ -238,7 +239,7 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
 
     batch_size = int(config.get("batch_size", 64))
     crop_chunks: list[np.ndarray] = []
-    stage_chunks: list[np.ndarray] = []
+    stage_logit_chunks: list[np.ndarray] = []
     sample_indices = query_rows["sample_index"].to_numpy(dtype=np.int64)
     query_doys = query_rows["query_doy"].to_numpy(dtype=np.float32)
     for start in range(0, len(query_rows), batch_size):
@@ -253,10 +254,17 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
                 stage_batch = prepare_model_batch(model=stage_model, arrays=arrays, indices=indices, query_doys=query_doys[start:end], normalizer=normalizer, device=device)
                 stage_outputs = forward_model(stage_model, stage_batch)
         crop_chunks.append(crop_outputs["crop_logits"].argmax(dim=1).cpu().numpy())
-        stage_chunks.append(stage_outputs["stage_logits"].argmax(dim=1).cpu().numpy())
+        stage_logit_chunks.append(stage_outputs["stage_logits"].detach().cpu().numpy())
 
     crop_pred = np.concatenate(crop_chunks)
-    stage_pred = np.concatenate(stage_chunks)
+    stage_logits = np.concatenate(stage_logit_chunks, axis=0)
+    stage_postprocess = str(config.get("stage_postprocess", "none"))
+    stage_pred = maybe_decode_stages(
+        torch.from_numpy(stage_logits),
+        torch.from_numpy(query_rows["point_id"].to_numpy(dtype=np.int64)),
+        torch.from_numpy(query_rows["query_doy"].to_numpy(dtype=np.float32)),
+        mode=stage_postprocess,
+    ).numpy()
     result_stats = write_result(query_rows, crop_pred, stage_pred, output_json)
     return {
         "output_json": str(output_json),
@@ -277,6 +285,7 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
         "stage_model_uses_aux_features": bool(int(stage_model.config.aux_feature_dim) > 0),
         "model_uses_mask_channels": bool(int(crop_model.config.in_channels) == 24 or int(stage_model.config.in_channels) == 24),
         "model_uses_aux_features": bool(int(crop_model.config.aux_feature_dim) > 0 or int(stage_model.config.aux_feature_dim) > 0),
+        "stage_postprocess": stage_postprocess,
         "result_stats": result_stats,
         "patch_report": report,
     }

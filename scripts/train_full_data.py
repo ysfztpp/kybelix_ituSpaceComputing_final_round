@@ -131,6 +131,8 @@ def main() -> None:
             gradient_accumulation_steps=int(config.get("gradient_accumulation_steps", 1)),
             clip_grad_norm=float(config.get("clip_grad_norm", 1.0)),
             label_smoothing=float(config.get("label_smoothing", 0.0)),
+            stage_ordinal_loss_weight=float(config.get("stage_ordinal_loss_weight", 0.0)),
+            stage_postprocess=str(config.get("stage_postprocess", "none")),
         )
         row = {"epoch": epoch, "lr": lr_used, **{f"train_{key}": value for key, value in train_metrics.items()}}
         row["train_competition_score"] = 0.4 * row["train_crop_macro_f1"] + 0.6 * row["train_rice_stage_macro_f1"]

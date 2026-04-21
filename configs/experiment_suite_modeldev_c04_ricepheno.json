@@ -1,0 +1,21 @@
+{
+  "name": "modeldev_c04_ricepheno_ordering",
+  "base_config": "configs/train_submission_date_aux_features.json",
+  "output_root": "artifacts/models/experiments/modeldev_c04_ricepheno_ordering",
+  "experiments": [
+    {
+      "name": "C13_c04_monotonic_decode",
+      "reason": "Tests whether pointwise monotonic Viterbi decoding improves rice phenology consistency without changing the underlying C04 model or loss.",
+      "overrides": {
+        "stage_postprocess": "monotonic_viterbi"
+      }
+    },
+    {
+      "name": "C14_c04_ordinal_stage_loss",
+      "reason": "Adds a small ordinal penalty to the C04 stage logits so ordered phenophase mistakes are penalized less arbitrarily than plain cross-entropy.",
+      "overrides": {
+        "stage_ordinal_loss_weight": 0.15
+      }
+    }
+  ]
+}

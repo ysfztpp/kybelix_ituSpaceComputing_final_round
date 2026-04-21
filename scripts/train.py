@@ -278,6 +278,8 @@ def main() -> None:
         checkpoint_metric=str(config.get("checkpoint_metric", "val_loss")),
         tie_breaker_metric=str(config.get("tie_breaker_metric", "val_loss")),
         label_smoothing=float(config.get("label_smoothing", 0.0)),
+        stage_ordinal_loss_weight=float(config.get("stage_ordinal_loss_weight", 0.0)),
+        stage_postprocess=str(config.get("stage_postprocess", "none")),
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "history.json").write_text(json.dumps(history, indent=2))

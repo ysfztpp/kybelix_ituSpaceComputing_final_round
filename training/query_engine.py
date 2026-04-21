@@ -9,6 +9,8 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise ImportError("torch is required for training.") from exc
 
+from .stage_decoding import maybe_decode_stages
+
 
 def _autocast_context(device: torch.device, enabled: bool):
     if not enabled:
@@ -22,6 +24,7 @@ def query_loss(
     batch: dict[str, torch.Tensor],
     stage_loss_weight: float,
     label_smoothing: float = 0.0,
+    stage_ordinal_loss_weight: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     crop_loss = nn.functional.cross_entropy(outputs["crop_logits"], batch["crop_type_id"], label_smoothing=label_smoothing)
     per_row_stage = nn.functional.cross_entropy(
@@ -33,10 +36,22 @@ def query_loss(
     weights = batch["stage_loss_weight"].float()
     if weights.sum() > 0:
         stage_loss = (per_row_stage * weights).sum() / weights.sum().clamp_min(1.0)
+        stage_probabilities = torch.softmax(outputs["stage_logits"], dim=1)
+        stage_positions = torch.arange(stage_probabilities.shape[1], device=stage_probabilities.device, dtype=stage_probabilities.dtype)
+        expected_stage = (stage_probabilities * stage_positions.unsqueeze(0)).sum(dim=1)
+        target_stage = batch["phenophase_stage_id"].float()
+        per_row_ordinal = nn.functional.smooth_l1_loss(expected_stage, target_stage, reduction="none")
+        ordinal_stage_loss = (per_row_ordinal * weights).sum() / weights.sum().clamp_min(1.0)
     else:
         stage_loss = per_row_stage.mean() * 0.0
-    total = crop_loss + stage_loss_weight * stage_loss
-    return total, {"loss": float(total.detach().cpu()), "crop_loss": float(crop_loss.detach().cpu()), "stage_loss": float(stage_loss.detach().cpu())}
+        ordinal_stage_loss = per_row_stage.mean() * 0.0
+    total = crop_loss + stage_loss_weight * stage_loss + float(stage_ordinal_loss_weight) * ordinal_stage_loss
+    return total, {
+        "loss": float(total.detach().cpu()),
+        "crop_loss": float(crop_loss.detach().cpu()),
+        "stage_loss": float(stage_loss.detach().cpu()),
+        "ordinal_stage_loss": float(ordinal_stage_loss.detach().cpu()),
+    }
 
 
 def _macro_f1(y_true: list[int], y_pred: list[int], labels: range) -> float:
@@ -63,13 +78,18 @@ def run_query_epoch(
     gradient_accumulation_steps: int = 1,
     clip_grad_norm: float = 1.0,
     label_smoothing: float = 0.0,
+    stage_ordinal_loss_weight: float = 0.0,
+    stage_postprocess: str = "none",
 ) -> dict[str, float]:
     model.train(train)
-    totals = {"loss": 0.0, "crop_loss": 0.0, "stage_loss": 0.0, "crop_correct": 0.0, "stage_correct": 0.0, "rice_stage_correct": 0.0, "count": 0.0, "rice_stage_count": 0.0}
+    totals = {"loss": 0.0, "crop_loss": 0.0, "stage_loss": 0.0, "ordinal_stage_loss": 0.0, "count": 0.0}
     crop_true: list[int] = []
     crop_pred_all: list[int] = []
-    rice_stage_true: list[int] = []
-    rice_stage_pred: list[int] = []
+    stage_true_all: list[int] = []
+    stage_weight_all: list[float] = []
+    point_id_all: list[int] = []
+    query_doy_all: list[float] = []
+    stage_logits_all: list[torch.Tensor] = []
     accumulation = max(1, int(gradient_accumulation_steps))
     context = torch.enable_grad() if train else torch.no_grad()
     if train:
@@ -85,7 +105,7 @@ def run_query_epoch(
                     batch["query_doy"],
                     batch.get("aux_features"),
                 )
-                loss, parts = query_loss(outputs, batch, stage_loss_weight, label_smoothing)
+                loss, parts = query_loss(outputs, batch, stage_loss_weight, label_smoothing, stage_ordinal_loss_weight)
                 loss_for_backward = loss / accumulation
             if train:
                 if scaler is not None and scaler.is_enabled():
@@ -106,30 +126,39 @@ def run_query_epoch(
                         optimizer.zero_grad(set_to_none=True)
             batch_size = int(batch["patches"].shape[0])
             crop_pred = outputs["crop_logits"].argmax(dim=1)
-            stage_pred = outputs["stage_logits"].argmax(dim=1)
-            stage_weight = batch["stage_loss_weight"].float()
-            totals["crop_correct"] += float((crop_pred == batch["crop_type_id"]).sum().detach().cpu())
-            totals["stage_correct"] += float((stage_pred == batch["phenophase_stage_id"]).sum().detach().cpu())
-            totals["rice_stage_correct"] += float(((stage_pred == batch["phenophase_stage_id"]).float() * stage_weight).sum().detach().cpu())
-            totals["rice_stage_count"] += float(stage_weight.sum().detach().cpu())
             totals["count"] += batch_size
             crop_true.extend(batch["crop_type_id"].detach().cpu().tolist())
             crop_pred_all.extend(crop_pred.detach().cpu().tolist())
-            rice_mask = stage_weight > 0
-            rice_stage_true.extend(batch["phenophase_stage_id"][rice_mask].detach().cpu().tolist())
-            rice_stage_pred.extend(stage_pred[rice_mask].detach().cpu().tolist())
-            for key in ["loss", "crop_loss", "stage_loss"]:
+            stage_true_all.extend(batch["phenophase_stage_id"].detach().cpu().tolist())
+            stage_weight_all.extend(batch["stage_loss_weight"].detach().cpu().tolist())
+            point_id_all.extend(batch["point_id"].detach().cpu().tolist())
+            query_doy_all.extend(batch["query_doy"].detach().cpu().tolist())
+            stage_logits_all.append(outputs["stage_logits"].detach().cpu())
+            for key in ["loss", "crop_loss", "stage_loss", "ordinal_stage_loss"]:
                 totals[key] += parts[key] * batch_size
     count = max(totals["count"], 1.0)
-    rice_count = max(totals["rice_stage_count"], 1.0)
+    stage_logits_tensor = torch.cat(stage_logits_all, dim=0) if stage_logits_all else torch.empty((0, 7), dtype=torch.float32)
+    stage_pred_all = maybe_decode_stages(
+        stage_logits_tensor,
+        torch.tensor(point_id_all, dtype=torch.long),
+        torch.tensor(query_doy_all, dtype=torch.float32),
+        mode=stage_postprocess,
+    ).tolist()
+    stage_correct = sum(1.0 for truth, pred in zip(stage_true_all, stage_pred_all) if int(truth) == int(pred))
+    rice_indices = [index for index, weight in enumerate(stage_weight_all) if float(weight) > 0.0]
+    rice_stage_true = [int(stage_true_all[index]) for index in rice_indices]
+    rice_stage_pred = [int(stage_pred_all[index]) for index in rice_indices]
+    rice_stage_correct = sum(1.0 for truth, pred in zip(rice_stage_true, rice_stage_pred) if truth == pred)
+    rice_count = max(float(len(rice_indices)), 1.0)
     return {
         "loss": totals["loss"] / count,
         "crop_loss": totals["crop_loss"] / count,
         "stage_loss": totals["stage_loss"] / count,
-        "crop_accuracy": totals["crop_correct"] / count,
+        "ordinal_stage_loss": totals["ordinal_stage_loss"] / count,
+        "crop_accuracy": sum(1.0 for truth, pred in zip(crop_true, crop_pred_all) if int(truth) == int(pred)) / count,
         "crop_macro_f1": _macro_f1(crop_true, crop_pred_all, range(3)),
-        "stage_accuracy_all_crops": totals["stage_correct"] / count,
-        "rice_stage_accuracy": totals["rice_stage_correct"] / rice_count,
+        "stage_accuracy_all_crops": stage_correct / count,
+        "rice_stage_accuracy": rice_stage_correct / rice_count,
         "rice_stage_macro_f1": _macro_f1(rice_stage_true, rice_stage_pred, range(7)),
     }
 
@@ -153,6 +182,8 @@ def fit_query(
     checkpoint_metric: str = "val_loss",
     tie_breaker_metric: str = "val_loss",
     label_smoothing: float = 0.0,
+    stage_ordinal_loss_weight: float = 0.0,
+    stage_postprocess: str = "none",
 ) -> list[dict[str, Any]]:
     history: list[dict[str, Any]] = []
     maximize_checkpoint_metric = "loss" not in checkpoint_metric.lower()
@@ -178,6 +209,8 @@ def fit_query(
             gradient_accumulation_steps,
             clip_grad_norm,
             label_smoothing,
+            stage_ordinal_loss_weight,
+            stage_postprocess,
         )
         val_metrics = run_query_epoch(
             model,
@@ -191,6 +224,8 @@ def fit_query(
             1,
             clip_grad_norm,
             0.0,
+            stage_ordinal_loss_weight,
+            stage_postprocess,
         )
         row = {"epoch": epoch, "lr": lr_used, **{f"train_{k}": v for k, v in train_metrics.items()}, **{f"val_{k}": v for k, v in val_metrics.items()}}
         for prefix in ("train", "val"):
