@@ -1,0 +1,35 @@
+{
+  "name": "modeldev_c03_ricepheno_ordering",
+  "base_config": "configs/train_submission_date.json",
+  "output_root": "artifacts/models/experiments/modeldev_c03_ricepheno_ordering",
+  "experiments": [
+    {
+      "name": "C15_c03_monotonic_decode",
+      "reason": "Tests monotonic Viterbi decoding on the true C03 baseline recipe, changing only stage decoding.",
+      "overrides": {
+        "epochs": 80,
+        "batch_size": 512,
+        "learning_rate": 0.0004,
+        "label_smoothing": 0.0,
+        "checkpoint_metric": "val_loss",
+        "tie_breaker_metric": "val_loss",
+        "min_lr": 0.0,
+        "stage_postprocess": "monotonic_viterbi"
+      }
+    },
+    {
+      "name": "C16_c03_ordinal_stage_loss",
+      "reason": "Adds a small ordinal stage penalty to the true C03 baseline while keeping the original decoder.",
+      "overrides": {
+        "epochs": 80,
+        "batch_size": 512,
+        "learning_rate": 0.0004,
+        "label_smoothing": 0.0,
+        "checkpoint_metric": "val_loss",
+        "tie_breaker_metric": "val_loss",
+        "min_lr": 0.0,
+        "stage_ordinal_loss_weight": 0.15
+      }
+    }
+  ]
+}
