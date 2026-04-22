@@ -25,6 +25,8 @@ def query_loss(
     stage_loss_weight: float,
     label_smoothing: float = 0.0,
     stage_ordinal_loss_weight: float = 0.0,
+    stage_sequence_loss_weight: float = 0.0,
+    stage_max_forward_step: float = 1.75,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     crop_loss = nn.functional.cross_entropy(outputs["crop_logits"], batch["crop_type_id"], label_smoothing=label_smoothing)
     per_row_stage = nn.functional.cross_entropy(
@@ -45,12 +47,39 @@ def query_loss(
     else:
         stage_loss = per_row_stage.mean() * 0.0
         ordinal_stage_loss = per_row_stage.mean() * 0.0
-    total = crop_loss + stage_loss_weight * stage_loss + float(stage_ordinal_loss_weight) * ordinal_stage_loss
+    sequence_stage_loss = stage_loss * 0.0
+    if float(stage_sequence_loss_weight) > 0.0:
+        sequence_losses: list[torch.Tensor] = []
+        stage_probabilities = torch.softmax(outputs["stage_logits"], dim=1)
+        stage_positions = torch.arange(stage_probabilities.shape[1], device=stage_probabilities.device, dtype=stage_probabilities.dtype)
+        expected_stage = (stage_probabilities * stage_positions.unsqueeze(0)).sum(dim=1)
+        point_ids = batch["point_id"].detach().long()
+        query_doys = batch["query_doy"].float()
+        weights = batch["stage_loss_weight"].float()
+        unique_points = torch.unique(point_ids)
+        for point_id in unique_points:
+            indices = torch.where((point_ids == point_id) & (weights > 0.0))[0]
+            if indices.numel() < 2:
+                continue
+            ordered = indices[torch.argsort(query_doys[indices])]
+            diffs = expected_stage[ordered][1:] - expected_stage[ordered][:-1]
+            backward_penalty = torch.relu(-diffs)
+            overshoot_penalty = torch.relu(diffs - float(stage_max_forward_step))
+            sequence_losses.append(backward_penalty.mean() + 0.5 * overshoot_penalty.mean())
+        if sequence_losses:
+            sequence_stage_loss = torch.stack(sequence_losses).mean()
+    total = (
+        crop_loss
+        + stage_loss_weight * stage_loss
+        + float(stage_ordinal_loss_weight) * ordinal_stage_loss
+        + float(stage_sequence_loss_weight) * sequence_stage_loss
+    )
     return total, {
         "loss": float(total.detach().cpu()),
         "crop_loss": float(crop_loss.detach().cpu()),
         "stage_loss": float(stage_loss.detach().cpu()),
         "ordinal_stage_loss": float(ordinal_stage_loss.detach().cpu()),
+        "sequence_stage_loss": float(sequence_stage_loss.detach().cpu()),
     }
 
 
@@ -79,10 +108,12 @@ def run_query_epoch(
     clip_grad_norm: float = 1.0,
     label_smoothing: float = 0.0,
     stage_ordinal_loss_weight: float = 0.0,
+    stage_sequence_loss_weight: float = 0.0,
+    stage_max_forward_step: float = 1.75,
     stage_postprocess: str = "none",
 ) -> dict[str, float]:
     model.train(train)
-    totals = {"loss": 0.0, "crop_loss": 0.0, "stage_loss": 0.0, "ordinal_stage_loss": 0.0, "count": 0.0}
+    totals = {"loss": 0.0, "crop_loss": 0.0, "stage_loss": 0.0, "ordinal_stage_loss": 0.0, "sequence_stage_loss": 0.0, "count": 0.0}
     crop_true: list[int] = []
     crop_pred_all: list[int] = []
     stage_true_all: list[int] = []
@@ -104,8 +135,17 @@ def run_query_epoch(
                     batch["time_doy"],
                     batch["query_doy"],
                     batch.get("aux_features"),
+                    batch.get("query_doy_mask"),
                 )
-                loss, parts = query_loss(outputs, batch, stage_loss_weight, label_smoothing, stage_ordinal_loss_weight)
+                loss, parts = query_loss(
+                    outputs,
+                    batch,
+                    stage_loss_weight,
+                    label_smoothing,
+                    stage_ordinal_loss_weight,
+                    stage_sequence_loss_weight,
+                    stage_max_forward_step,
+                )
                 loss_for_backward = loss / accumulation
             if train:
                 if scaler is not None and scaler.is_enabled():
@@ -134,7 +174,7 @@ def run_query_epoch(
             point_id_all.extend(batch["point_id"].detach().cpu().tolist())
             query_doy_all.extend(batch["query_doy"].detach().cpu().tolist())
             stage_logits_all.append(outputs["stage_logits"].detach().cpu())
-            for key in ["loss", "crop_loss", "stage_loss", "ordinal_stage_loss"]:
+            for key in ["loss", "crop_loss", "stage_loss", "ordinal_stage_loss", "sequence_stage_loss"]:
                 totals[key] += parts[key] * batch_size
     count = max(totals["count"], 1.0)
     stage_logits_tensor = torch.cat(stage_logits_all, dim=0) if stage_logits_all else torch.empty((0, 7), dtype=torch.float32)
@@ -155,6 +195,7 @@ def run_query_epoch(
         "crop_loss": totals["crop_loss"] / count,
         "stage_loss": totals["stage_loss"] / count,
         "ordinal_stage_loss": totals["ordinal_stage_loss"] / count,
+        "sequence_stage_loss": totals["sequence_stage_loss"] / count,
         "crop_accuracy": sum(1.0 for truth, pred in zip(crop_true, crop_pred_all) if int(truth) == int(pred)) / count,
         "crop_macro_f1": _macro_f1(crop_true, crop_pred_all, range(3)),
         "stage_accuracy_all_crops": stage_correct / count,
@@ -183,6 +224,8 @@ def fit_query(
     tie_breaker_metric: str = "val_loss",
     label_smoothing: float = 0.0,
     stage_ordinal_loss_weight: float = 0.0,
+    stage_sequence_loss_weight: float = 0.0,
+    stage_max_forward_step: float = 1.75,
     stage_postprocess: str = "none",
 ) -> list[dict[str, Any]]:
     history: list[dict[str, Any]] = []
@@ -210,6 +253,8 @@ def fit_query(
             clip_grad_norm,
             label_smoothing,
             stage_ordinal_loss_weight,
+            stage_sequence_loss_weight,
+            stage_max_forward_step,
             stage_postprocess,
         )
         val_metrics = run_query_epoch(
@@ -225,6 +270,8 @@ def fit_query(
             clip_grad_norm,
             0.0,
             stage_ordinal_loss_weight,
+            stage_sequence_loss_weight,
+            stage_max_forward_step,
             stage_postprocess,
         )
         row = {"epoch": epoch, "lr": lr_used, **{f"train_{k}": v for k, v in train_metrics.items()}, **{f"val_{k}": v for k, v in val_metrics.items()}}
