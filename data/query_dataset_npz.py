@@ -36,6 +36,9 @@ class QueryDatePatchDataset(Dataset):
         include_valid_mask_as_channels: bool = False,
         use_aux_features: bool = False,
         aux_feature_set: str = "summary",
+        random_time_shift_days: int = 0,
+        query_doy_dropout_prob: float = 0.0,
+        time_doy_dropout_prob: float = 0.0,
     ) -> None:
         if torch is None:
             raise ImportError("torch is required for QueryDatePatchDataset. Install PyTorch before training.")
@@ -50,10 +53,17 @@ class QueryDatePatchDataset(Dataset):
             sample_indices = split_df.loc[split_df["split"] == split, "sample_index"].to_numpy(dtype=np.int64)
 
         self.normalizer = NpzPatchNormalizer(normalization_json, normalization_method) if normalization_json else None
+        self.split = str(split or "")
         self.rice_stage_loss_only = bool(rice_stage_loss_only)
         self.include_valid_mask_as_channels = bool(include_valid_mask_as_channels)
         self.use_aux_features = bool(use_aux_features)
         self.aux_feature_set = str(aux_feature_set)
+        self.random_time_shift_days = int(random_time_shift_days)
+        self.query_doy_dropout_prob = float(query_doy_dropout_prob)
+        self.time_doy_dropout_prob = float(time_doy_dropout_prob)
+        self.enable_temporal_augmentation = self.split == "train" and (
+            self.random_time_shift_days > 0 or self.query_doy_dropout_prob > 0.0 or self.time_doy_dropout_prob > 0.0
+        )
         self.bands = self.arrays.get("bands", np.asarray([f"B{i:02d}" for i in range(1, self.arrays["patches"].shape[2] + 1)])).astype(str).tolist()
         self.aux_feature_names = aux_feature_names(self.bands, feature_set=self.aux_feature_set) if self.use_aux_features else []
         self.aux_feature_dim = len(self.aux_feature_names)
@@ -120,13 +130,30 @@ class QueryDatePatchDataset(Dataset):
             patches = self.normalizer(patches, valid_pixel_mask)
         if self.include_valid_mask_as_channels:
             patches = np.concatenate([patches, valid_pixel_mask.astype(np.float32)], axis=1)
+        time_doy = self.arrays["time_doy"][sample_index].astype(np.float32).copy()
+        query_doy_value = float(query_doy)
+        query_doy_mask = 1.0
+        if self.enable_temporal_augmentation:
+            if self.random_time_shift_days > 0:
+                shift = float(np.random.randint(-self.random_time_shift_days, self.random_time_shift_days + 1))
+                positive_mask = time_doy > 0
+                time_doy[positive_mask] = np.clip(time_doy[positive_mask] + shift, 1.0, 366.0)
+                query_doy_value = float(np.clip(query_doy_value + shift, 1.0, 366.0))
+            if self.time_doy_dropout_prob > 0.0:
+                existing = self.arrays["time_mask"][sample_index].astype(bool)
+                drop_mask = (np.random.random(size=time_doy.shape[0]) < self.time_doy_dropout_prob) & existing
+                time_doy[drop_mask] = 0.0
+            if self.query_doy_dropout_prob > 0.0 and float(np.random.random()) < self.query_doy_dropout_prob:
+                query_doy_value = 0.0
+                query_doy_mask = 0.0
         sample = {
             "patches": torch.from_numpy(patches.astype(np.float32, copy=False)),
             "valid_pixel_mask": torch.from_numpy(valid_pixel_mask),
             "band_mask": torch.from_numpy(self.arrays["band_mask"][sample_index].astype(bool)),
             "time_mask": torch.from_numpy(self.arrays["time_mask"][sample_index].astype(bool)),
-            "time_doy": torch.from_numpy(self.arrays["time_doy"][sample_index].astype(np.float32)),
-            "query_doy": torch.tensor(float(query_doy), dtype=torch.float32),
+            "time_doy": torch.from_numpy(time_doy),
+            "query_doy": torch.tensor(query_doy_value, dtype=torch.float32),
+            "query_doy_mask": torch.tensor(query_doy_mask, dtype=torch.float32),
             "crop_type_id": torch.tensor(crop_id, dtype=torch.long),
             "phenophase_stage_id": torch.tensor(stage_index, dtype=torch.long),
             "stage_loss_weight": torch.tensor(stage_weight, dtype=torch.float32),

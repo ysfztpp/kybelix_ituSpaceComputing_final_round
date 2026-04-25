@@ -59,6 +59,13 @@ C11 validation run:
 python scripts/train_full_data.py --config configs/train_full_data_c11_stage_phenology_light_epoch112.json
 ```
 
+For the planned C19 strong-date-shift hedge model, use the fixed epoch selected
+from the corresponding validation run:
+
+```bash
+python scripts/train_full_data.py --config configs/train_full_data_c19_strong_date_shift_dropout_epoch58.json
+```
+
 Expected output:
 
 ```text
@@ -83,6 +90,12 @@ For C11, prepare the GitLab submission repo from this project folder:
 
 ```bash
 python scripts/prepare_c11_submission.py
+```
+
+For C19, prepare the GitLab submission repo from this project folder:
+
+```bash
+python scripts/prepare_c19_submission.py
 ```
 
 This copies:

@@ -9,7 +9,7 @@ except ImportError as exc:  # pragma: no cover
     raise ImportError("torch is required for model code. Install PyTorch before training.") from exc
 
 from .cnn_encoder import PatchCNNEncoder
-from .temporal_transformer import DayOfYearEncoding, MaskedTemporalPool
+from .temporal_transformer import MaskedTemporalPool, build_time_encoding
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,9 @@ class QueryCNNTransformerConfig:
     num_phenophase_classes: int = 7
     use_query_doy: bool = True
     use_time_doy: bool = True
+    time_encoding_type: str = "sincos"
+    query_encoding_type: str = "sincos"
+    time_encoding_harmonics: int = 4
     aux_feature_dim: int = 0
     aux_hidden_dim: int = 128
     aux_target: str = "shared"
@@ -43,8 +46,8 @@ class QueryCNNTransformerClassifier(nn.Module):
         self.config = config
         self.cnn = PatchCNNEncoder(config.in_channels, config.cnn_embedding_dim, config.dropout)
         self.input_proj = nn.Identity() if config.cnn_embedding_dim == config.transformer_dim else nn.Linear(config.cnn_embedding_dim, config.transformer_dim)
-        self.time_encoding = DayOfYearEncoding(config.transformer_dim)
-        self.query_encoding = DayOfYearEncoding(config.transformer_dim)
+        self.time_encoding = build_time_encoding(config.time_encoding_type, config.transformer_dim, harmonics=config.time_encoding_harmonics)
+        self.query_encoding = build_time_encoding(config.query_encoding_type, config.transformer_dim, harmonics=config.time_encoding_harmonics)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=config.transformer_dim,
             nhead=config.attention_heads,
@@ -88,6 +91,7 @@ class QueryCNNTransformerClassifier(nn.Module):
         time_doy: torch.Tensor,
         query_doy: torch.Tensor,
         aux_features: torch.Tensor | None = None,
+        query_doy_mask: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         batch_size, timesteps, bands, height, width = patches.shape
         flat = patches.reshape(batch_size * timesteps, bands, height, width)
@@ -99,6 +103,8 @@ class QueryCNNTransformerClassifier(nn.Module):
         pooled = self.pool(x, time_mask.bool())
         if self.config.use_query_doy:
             query = self.query_encoding(query_doy).reshape(batch_size, -1)
+            if query_doy_mask is not None:
+                query = query * query_doy_mask.float().reshape(batch_size, 1)
         else:
             query = torch.zeros_like(pooled)
         base = torch.cat([pooled, query], dim=1)

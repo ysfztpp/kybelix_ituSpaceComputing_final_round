@@ -222,6 +222,9 @@ def main() -> None:
         include_valid_mask_as_channels=bool(config.get("include_valid_mask_as_channels", False)),
         use_aux_features=use_aux_features,
         aux_feature_set=aux_feature_set,
+        random_time_shift_days=int(config.get("random_time_shift_days", 0)),
+        query_doy_dropout_prob=float(config.get("query_doy_dropout_prob", 0.0)),
+        time_doy_dropout_prob=float(config.get("time_doy_dropout_prob", 0.0)),
     )
     val_ds = QueryDatePatchDataset(
         npz_path=resolve_path(config["dataset_npz"]),
@@ -279,6 +282,8 @@ def main() -> None:
         tie_breaker_metric=str(config.get("tie_breaker_metric", "val_loss")),
         label_smoothing=float(config.get("label_smoothing", 0.0)),
         stage_ordinal_loss_weight=float(config.get("stage_ordinal_loss_weight", 0.0)),
+        stage_sequence_loss_weight=float(config.get("stage_sequence_loss_weight", 0.0)),
+        stage_max_forward_step=float(config.get("stage_max_forward_step", 1.75)),
         stage_postprocess=str(config.get("stage_postprocess", "none")),
     )
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,109 @@
+{
+  "name": "modeldev_temporal_research",
+  "base_config": "configs/train_submission_date.json",
+  "output_root": "artifacts/models/experiments/modeldev_temporal_research",
+  "experiments": [
+    {
+      "name": "C17_c03_structured_stage",
+      "reason": "Adds a soft sequence-structure loss and transition-aware decoding to the C03 baseline to enforce more realistic rice phenology trajectories.",
+      "overrides": {
+        "epochs": 100,
+        "batch_size": 256,
+        "gradient_accumulation_steps": 2,
+        "learning_rate": 0.0004,
+        "num_workers": 6,
+        "early_stopping_patience": 18,
+        "label_smoothing": 0.0,
+        "checkpoint_metric": "val_loss",
+        "tie_breaker_metric": "val_loss",
+        "min_lr": 0.0,
+        "stage_sequence_loss_weight": 0.20,
+        "stage_max_forward_step": 1.5,
+        "stage_postprocess": "transition_viterbi"
+      }
+    },
+    {
+      "name": "C18_c03_no_query_date_long",
+      "reason": "Re-tests the no-query-date hypothesis with enough epochs and patience to see whether the model can rely on imagery and temporal context instead of the direct query date.",
+      "flags": [
+        "--no-query-date"
+      ],
+      "overrides": {
+        "epochs": 120,
+        "batch_size": 256,
+        "gradient_accumulation_steps": 2,
+        "learning_rate": 0.0004,
+        "num_workers": 6,
+        "early_stopping_patience": 24,
+        "label_smoothing": 0.0,
+        "checkpoint_metric": "val_loss",
+        "tie_breaker_metric": "val_loss",
+        "min_lr": 0.0
+      }
+    },
+    {
+      "name": "C19_c03_strong_date_shift_dropout",
+      "reason": "Uses aggressive date augmentation so the model cannot overfit exact calendar positions and must rely more on curve shape and imagery.",
+      "overrides": {
+        "epochs": 150,
+        "batch_size": 256,
+        "gradient_accumulation_steps": 2,
+        "learning_rate": 0.0004,
+        "num_workers": 6,
+        "early_stopping_patience": 36,
+        "label_smoothing": 0.0,
+        "checkpoint_metric": "val_competition_score",
+        "tie_breaker_metric": "val_loss",
+        "min_lr": 0.0,
+        "random_time_shift_days": 60,
+        "query_doy_dropout_prob": 0.55,
+        "time_doy_dropout_prob": 0.20
+      }
+    },
+    {
+      "name": "C20_c03_fourier_time_encoding",
+      "reason": "Replaces the simple sin-cos day encoding with a richer multi-harmonic Fourier encoding to better represent seasonal structure.",
+      "overrides": {
+        "epochs": 100,
+        "batch_size": 256,
+        "gradient_accumulation_steps": 2,
+        "learning_rate": 0.0004,
+        "num_workers": 6,
+        "early_stopping_patience": 18,
+        "label_smoothing": 0.0,
+        "checkpoint_metric": "val_loss",
+        "tie_breaker_metric": "val_loss",
+        "min_lr": 0.0,
+        "model": {
+          "time_encoding_type": "fourier",
+          "query_encoding_type": "fourier",
+          "time_encoding_harmonics": 6
+        }
+      }
+    },
+    {
+      "name": "C21_c03_time2vec_structured",
+      "reason": "Best-shot combined experiment: Time2Vec temporal encoding plus soft structured stage modeling.",
+      "overrides": {
+        "epochs": 120,
+        "batch_size": 256,
+        "gradient_accumulation_steps": 2,
+        "learning_rate": 0.0004,
+        "num_workers": 6,
+        "early_stopping_patience": 22,
+        "label_smoothing": 0.0,
+        "checkpoint_metric": "val_loss",
+        "tie_breaker_metric": "val_loss",
+        "min_lr": 0.0,
+        "stage_sequence_loss_weight": 0.20,
+        "stage_max_forward_step": 1.5,
+        "stage_postprocess": "transition_viterbi",
+        "model": {
+          "time_encoding_type": "time2vec",
+          "query_encoding_type": "time2vec",
+          "time_encoding_harmonics": 6
+        }
+      }
+    }
+  ]
+}
