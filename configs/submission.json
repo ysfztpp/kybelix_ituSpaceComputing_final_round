@@ -7,7 +7,7 @@
   "work_dir": "/tmp/kybelix_submission_work",
   "batch_size": 64,
   "device": "auto",
-  "use_point_stage_bijection": true,
+  "use_point_stage_bijection": false,
   "preprocessing": {
     "patch_size": 15,
     "bands": ["B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B09", "B11", "B12"],
