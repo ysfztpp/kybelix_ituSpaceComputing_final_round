@@ -33,7 +33,7 @@ echo "[submission] repository files:"
 find . -maxdepth 2 -type f \
   | sed 's#^\./##' \
   | sort \
-  | grep -E '^(inference.py|run.sh|Dockerfile|configs/|scripts/|models/|data/|preprocessing/|training/|checkpoints/model.pt|artifacts/normalization/)' \
+  | grep -E '^(inference.py|run.sh|Dockerfile|configs/|scripts/|models/|data/|preprocessing/|training/|checkpoints/|artifacts/normalization/)' \
   | head -120
 
 echo "[submission] input files:"
@@ -49,8 +49,8 @@ else
 fi
 
 echo "[submission] region_test TIFF count: $(find -L "${SUBMISSION_INPUT_ROOT}/region_test" -maxdepth 1 -type f -name '*.tiff' 2>/dev/null | wc -l | tr -d ' ')"
-echo "[submission] checkpoint:"
-ls -lh checkpoints/model.pt
+echo "[submission] checkpoints:"
+ls -lh checkpoints/
 
 ${PYTHON_BIN} - <<PY
 import json
