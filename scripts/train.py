@@ -211,6 +211,9 @@ def main() -> None:
         config["output_dir"] = str(config.get("output_dir", "artifacts/models/cnn_transformer")) + "_shuffled_labels"
     use_aux_features = bool(config.get("use_aux_features", False))
     aux_feature_set = str(config.get("aux_feature_set", "summary"))
+    use_spectral_indices = bool(config.get("use_spectral_indices", False))
+    _idx_stats_raw = config.get("spectral_index_stats_json", None)
+    spectral_index_stats_json = resolve_path(_idx_stats_raw) if _idx_stats_raw else None
 
     train_ds = QueryDatePatchDataset(
         npz_path=resolve_path(config["dataset_npz"]),
@@ -225,6 +228,8 @@ def main() -> None:
         random_time_shift_days=int(config.get("random_time_shift_days", 0)),
         query_doy_dropout_prob=float(config.get("query_doy_dropout_prob", 0.0)),
         time_doy_dropout_prob=float(config.get("time_doy_dropout_prob", 0.0)),
+        use_spectral_indices=use_spectral_indices,
+        spectral_index_stats_json=spectral_index_stats_json,
     )
     val_ds = QueryDatePatchDataset(
         npz_path=resolve_path(config["dataset_npz"]),
@@ -235,6 +240,8 @@ def main() -> None:
         include_valid_mask_as_channels=bool(config.get("include_valid_mask_as_channels", False)),
         use_aux_features=use_aux_features,
         aux_feature_set=aux_feature_set,
+        use_spectral_indices=use_spectral_indices,
+        spectral_index_stats_json=spectral_index_stats_json,
     )
     if use_aux_features:
         model_config_data["aux_feature_dim"] = int(train_ds.aux_feature_dim)

@@ -65,6 +65,9 @@ def main() -> None:
 
     use_aux_features = bool(config.get("use_aux_features", False))
     aux_feature_set = str(config.get("aux_feature_set", "summary"))
+    use_spectral_indices = bool(config.get("use_spectral_indices", False))
+    _idx_stats_raw = config.get("spectral_index_stats_json", None)
+    spectral_index_stats_json = resolve_path(_idx_stats_raw) if _idx_stats_raw else None
 
     train_ds = QueryDatePatchDataset(
         npz_path=resolve_path(config["dataset_npz"]),
@@ -78,14 +81,13 @@ def main() -> None:
         random_time_shift_days=int(config.get("random_time_shift_days", 0)),
         query_doy_dropout_prob=float(config.get("query_doy_dropout_prob", 0.0)),
         time_doy_dropout_prob=float(config.get("time_doy_dropout_prob", 0.0)),
+        use_spectral_indices=use_spectral_indices,
+        spectral_index_stats_json=spectral_index_stats_json,
     )
 
     model_config_data = dict(config.get("model", {}))
     model_config_data["aux_feature_dim"] = int(train_ds.aux_feature_dim) if use_aux_features else 0
     model_config = QueryCNNTransformerConfig(**{key: value for key, value in model_config_data.items() if key in QueryCNNTransformerConfig.__annotations__})
-    expected_channels = 24 if bool(config.get("include_valid_mask_as_channels", True)) else 12
-    if model_config.in_channels != expected_channels:
-        raise ValueError(f"model in_channels must be {expected_channels} for this full-data config, got {model_config.in_channels}")
 
     pin_memory = device.type == "cuda"
     train_loader = DataLoader(
