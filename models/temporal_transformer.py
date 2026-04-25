@@ -71,6 +71,31 @@ class Time2VecDayOfYearEncoding(nn.Module):
         return projected * valid.unsqueeze(-1)
 
 
+class LearnableFourierEncoding(nn.Module):
+    """Fourier encoding with learnable frequencies and phase offsets.
+
+    Unlike Time2Vec there is no linear term, preventing the model from
+    learning a monotone DOY→stage mapping. Frequencies are initialised from
+    standard Fourier harmonics but are free to shift during training.
+    """
+
+    def __init__(self, dim: int, harmonics: int = 6) -> None:
+        super().__init__()
+        H = max(1, int(harmonics))
+        init_freqs = torch.tensor([2.0 * math.pi * k / 366.0 for k in range(1, H + 1)])
+        self.freqs = nn.Parameter(init_freqs)
+        self.phases = nn.Parameter(torch.zeros(H))
+        self.proj = nn.Sequential(nn.Linear(H * 2, dim), nn.GELU(), nn.LayerNorm(dim))
+
+    def forward(self, time_doy: torch.Tensor) -> torch.Tensor:
+        raw = time_doy.float()
+        valid = raw > 0
+        doy = torch.clamp(raw, min=1.0, max=366.0)
+        angles = doy.unsqueeze(-1) * self.freqs + self.phases  # [..., H]
+        enc = torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
+        return self.proj(enc) * valid.unsqueeze(-1)
+
+
 def build_time_encoding(encoding_type: str, dim: int, harmonics: int = 4) -> nn.Module:
     mode = str(encoding_type or "sincos").strip().lower()
     if mode in {"sincos", "default", "mlp_sincos"}:
@@ -80,6 +105,8 @@ def build_time_encoding(encoding_type: str, dim: int, harmonics: int = 4) -> nn.
     if mode in {"time2vec", "t2v"}:
         periodic_dims = max(2, harmonics * 2 - 1)
         return Time2VecDayOfYearEncoding(dim, periodic_dims=periodic_dims)
+    if mode in {"learnable_fourier", "lf"}:
+        return LearnableFourierEncoding(dim, harmonics=harmonics)
     raise ValueError(f"unsupported time encoding type: {encoding_type}")
 
 

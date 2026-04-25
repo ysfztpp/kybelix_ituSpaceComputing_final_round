@@ -85,6 +85,7 @@ class QueryDatePatchDataset(Dataset):
         time_doy_dropout_prob: float = 0.0,
         use_spectral_indices: bool = False,
         spectral_index_stats_json: Path | None = None,
+        use_relative_doy: bool = False,
     ) -> None:
         if torch is None:
             raise ImportError("torch is required for QueryDatePatchDataset. Install PyTorch before training.")
@@ -111,6 +112,7 @@ class QueryDatePatchDataset(Dataset):
             self.random_time_shift_days > 0 or self.query_doy_dropout_prob > 0.0 or self.time_doy_dropout_prob > 0.0
         )
         self.use_spectral_indices = bool(use_spectral_indices)
+        self.use_relative_doy = bool(use_relative_doy)
         if self.use_spectral_indices:
             if spectral_index_stats_json is None:
                 raise ValueError("spectral_index_stats_json must be provided when use_spectral_indices=True")
@@ -214,6 +216,15 @@ class QueryDatePatchDataset(Dataset):
             if self.query_doy_dropout_prob > 0.0 and float(np.random.random()) < self.query_doy_dropout_prob:
                 query_doy_value = 0.0
                 query_doy_mask = 0.0
+        if self.use_relative_doy:
+            # Subtract series temporal center so the model sees relative dates.
+            # Computed after augmentation so shifts cancel out automatically.
+            time_mask_bool = self.arrays["time_mask"][sample_index].astype(bool)
+            valid_doys = time_doy[time_mask_bool]
+            series_center = float(valid_doys.mean()) if len(valid_doys) > 0 else 183.0
+            time_doy = time_doy.copy()
+            time_doy[time_mask_bool] -= series_center
+            query_doy_value = query_doy_value - series_center
         sample = {
             "patches": torch.from_numpy(patches.astype(np.float32, copy=False)),
             "valid_pixel_mask": torch.from_numpy(valid_pixel_mask),

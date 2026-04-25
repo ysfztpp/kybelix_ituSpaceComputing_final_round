@@ -31,6 +31,7 @@ class QueryCNNTransformerConfig:
     aux_feature_dim: int = 0
     aux_hidden_dim: int = 128
     aux_target: str = "shared"
+    use_cross_series_query: bool = False
 
 
 class QueryCNNTransformerClassifier(nn.Module):
@@ -102,9 +103,20 @@ class QueryCNNTransformerClassifier(nn.Module):
         x = self.transformer(x, src_key_padding_mask=~time_mask.bool())
         pooled = self.pool(x, time_mask.bool())
         if self.config.use_query_doy:
-            query = self.query_encoding(query_doy).reshape(batch_size, -1)
-            if query_doy_mask is not None:
-                query = query * query_doy_mask.float().reshape(batch_size, 1)
+            if self.config.use_cross_series_query:
+                # Encode query as its relative distances to every observed timestep.
+                # rel_dists[b, t] = query_doy[b] - time_doy[b, t] (days after each acquisition)
+                rel_dists = query_doy.unsqueeze(-1) - time_doy          # [B, T]
+                rel_enc = self.query_encoding(rel_dists)                 # [B, T, D]
+                valid_w = time_mask.bool().float().unsqueeze(-1)        # [B, T, 1]
+                n_valid = valid_w.sum(dim=1).clamp(min=1.0)             # [B, 1]
+                query = (rel_enc * valid_w).sum(dim=1) / n_valid        # [B, D]
+                if query_doy_mask is not None:
+                    query = query * query_doy_mask.float().reshape(batch_size, 1)
+            else:
+                query = self.query_encoding(query_doy).reshape(batch_size, -1)
+                if query_doy_mask is not None:
+                    query = query * query_doy_mask.float().reshape(batch_size, 1)
         else:
             query = torch.zeros_like(pooled)
         base = torch.cat([pooled, query], dim=1)

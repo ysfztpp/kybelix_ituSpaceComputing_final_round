@@ -165,6 +165,23 @@ def prepare_patches(arrays: dict[str, np.ndarray], indices: np.ndarray, normaliz
     return patches.astype(np.float32, copy=False)
 
 
+def _apply_relative_doy(
+    time_doy_batch: np.ndarray,
+    time_mask_batch: np.ndarray,
+    query_doys: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Subtract per-sample series-center DOY from time_doy and query_doy."""
+    time_doy_out = time_doy_batch.copy()
+    query_doys_out = query_doys.copy()
+    for i in range(len(time_doy_batch)):
+        valid = time_mask_batch[i].astype(bool)
+        valid_doys = time_doy_batch[i][valid]
+        series_center = float(valid_doys.mean()) if len(valid_doys) > 0 else 183.0
+        time_doy_out[i][valid] -= series_center
+        query_doys_out[i] -= series_center
+    return time_doy_out, query_doys_out
+
+
 def prepare_model_batch(
     *,
     model: QueryCNNTransformerClassifier,
@@ -173,14 +190,21 @@ def prepare_model_batch(
     query_doys: np.ndarray,
     normalizer: NpzPatchNormalizer,
     device: torch.device,
+    use_relative_doy: bool = False,
 ) -> dict[str, torch.Tensor]:
     include_mask_channels = int(model.config.in_channels) == 24
     patches = prepare_patches(arrays, indices, normalizer, include_mask_channels)
+    time_doy_np = arrays["time_doy"][indices].astype(np.float32)
+    query_doys_np = query_doys.astype(np.float32, copy=False)
+    if use_relative_doy:
+        time_doy_np, query_doys_np = _apply_relative_doy(
+            time_doy_np, arrays["time_mask"][indices], query_doys_np
+        )
     batch = {
         "patches": torch.from_numpy(patches).to(device),
         "time_mask": torch.from_numpy(arrays["time_mask"][indices].astype(bool)).to(device),
-        "time_doy": torch.from_numpy(arrays["time_doy"][indices].astype(np.float32)).to(device),
-        "query_doy": torch.from_numpy(query_doys.astype(np.float32, copy=False)).to(device),
+        "time_doy": torch.from_numpy(time_doy_np).to(device),
+        "query_doy": torch.from_numpy(query_doys_np).to(device),
     }
     if int(model.config.aux_feature_dim) > 0:
         bands = arrays.get("bands", np.asarray(BAND_ORDER)).astype(str).tolist()
@@ -295,6 +319,12 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
         arrays = {name: npz[name] for name in npz.files}
     query_rows = read_query_rows(points_csv, arrays)
 
+    # Read use_relative_doy from checkpoint train_config (saved during training).
+    import torch as _torch
+    _ckpt_payload = _torch.load(crop_checkpoint, map_location="cpu", weights_only=False)
+    _train_cfg = _ckpt_payload.get("train_config", {})
+    use_relative_doy = bool(_train_cfg.get("use_relative_doy", False))
+
     batch_size = int(config.get("batch_size", 64))
     crop_logit_chunks: list[np.ndarray] = []
     stage_logit_chunks: list[np.ndarray] = []
@@ -304,13 +334,13 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
         end = min(start + batch_size, len(query_rows))
         indices = sample_indices[start:end]
         batch_doys = query_doys[start:end]
-        crop_batch = prepare_model_batch(model=crop_model, arrays=arrays, indices=indices, query_doys=batch_doys, normalizer=normalizer, device=device)
+        crop_batch = prepare_model_batch(model=crop_model, arrays=arrays, indices=indices, query_doys=batch_doys, normalizer=normalizer, device=device, use_relative_doy=use_relative_doy)
         with torch.no_grad():
             crop_outputs = forward_model(crop_model, crop_batch)
             if stage_model is crop_model:
                 stage_outputs = crop_outputs
             else:
-                stage_batch = prepare_model_batch(model=stage_model, arrays=arrays, indices=indices, query_doys=batch_doys, normalizer=normalizer, device=device)
+                stage_batch = prepare_model_batch(model=stage_model, arrays=arrays, indices=indices, query_doys=batch_doys, normalizer=normalizer, device=device, use_relative_doy=use_relative_doy)
                 stage_outputs = forward_model(stage_model, stage_batch)
             crop_logits_np = crop_outputs["crop_logits"].detach().cpu().numpy()
             stage_logits_np = stage_outputs["stage_logits"].detach().cpu().numpy()
