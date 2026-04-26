@@ -214,11 +214,15 @@ def main() -> None:
     use_spectral_indices = bool(config.get("use_spectral_indices", False))
     _idx_stats_raw = config.get("spectral_index_stats_json", None)
     spectral_index_stats_json = resolve_path(_idx_stats_raw) if _idx_stats_raw else None
+    _split_csv_raw = config.get("split_csv")
+    split_csv_path = resolve_path(_split_csv_raw) if _split_csv_raw else None
+    split_train = "train" if split_csv_path else None
+    split_val = "val" if split_csv_path else None
 
     train_ds = QueryDatePatchDataset(
         npz_path=resolve_path(config["dataset_npz"]),
-        split_csv=resolve_path(config["split_csv"]),
-        split="train",
+        split_csv=split_csv_path,
+        split=split_train,
         normalization_json=resolve_path(config["normalization_json"]),
         rice_stage_loss_only=bool(config.get("rice_stage_loss_only", True)),
         shuffle_labels_seed=int(config.get("seed", 42)) if args.shuffle_labels else None,
@@ -233,8 +237,8 @@ def main() -> None:
     )
     val_ds = QueryDatePatchDataset(
         npz_path=resolve_path(config["dataset_npz"]),
-        split_csv=resolve_path(config["split_csv"]),
-        split="val",
+        split_csv=split_csv_path,
+        split=split_val,
         normalization_json=resolve_path(config["normalization_json"]),
         rice_stage_loss_only=bool(config.get("rice_stage_loss_only", True)),
         include_valid_mask_as_channels=bool(config.get("include_valid_mask_as_channels", False)),
