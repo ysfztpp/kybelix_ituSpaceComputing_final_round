@@ -160,6 +160,35 @@ This is the first serious challenger to the current CNN+Transformer line.
 3. `C31`: same backbone plus self-supervised pretraining.
 4. `C32`: multimodal extension if temperature/weather or SAR can be added.
 
+## C28b Correction
+
+The first heavy TSViT run exposed a stage-collapse pattern:
+
+- crop learned extremely well,
+- stage validation accuracy stayed near `1/7`,
+- transition-Viterbi decoding and strong date corruption were the main suspects.
+
+Recommended retry:
+
+- `configs/train_c28b_tsvit_l4_stage_recovery_val.json`
+
+Changes from C28:
+
+- `stage_postprocess: none`
+- `stage_sequence_loss_weight: 0.0`
+- `stage_loss_weight: 1.0`
+- `query_doy_dropout_prob: 0.0`
+- `time_doy_dropout_prob: 0.0`
+- `random_time_shift_days: 20`
+- `batch_size: 160`
+- `gradient_accumulation_steps: 1`
+- `num_workers: 8`
+
+Why:
+
+- First recover raw stage learning before adding structured decoding back.
+- Use larger per-step batches to better utilize an L4 GPU.
+
 ## Recommendation
 
 For now, the most defensible path is:
