@@ -9,7 +9,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from models.query_cnn_transformer import QueryCNNTransformerClassifier, QueryCNNTransformerConfig
+from models.model_factory import build_model, build_model_config, normalize_model_type
 
 
 def resolve_path(value: str | Path) -> Path:
@@ -84,7 +84,8 @@ def main() -> None:
         if key not in payload:
             fail(f"checkpoint missing key: {key}")
 
-    model_config = QueryCNNTransformerConfig(**payload["model_config"])
+    model_type = normalize_model_type(payload.get("model_type", "query_cnn_transformer"))
+    model_config = build_model_config(model_type, payload["model_config"])
     if model_config.in_channels not in {12, 24}:
         fail(f"model in_channels must be 12 or 24, got {model_config.in_channels}")
     if model_config.patch_size != 15:
@@ -94,7 +95,7 @@ def main() -> None:
     if model_config.num_phenophase_classes != 7:
         fail(f"model num_phenophase_classes must be 7, got {model_config.num_phenophase_classes}")
 
-    model = QueryCNNTransformerClassifier(model_config)
+    model = build_model(model_type, model_config)
     state = payload["model_state_dict"]
     if any(key.startswith("_orig_mod.") for key in state):
         state = {key.removeprefix("_orig_mod."): value for key, value in state.items()}
@@ -110,6 +111,7 @@ def main() -> None:
                 "checkpoint_metric": payload.get("checkpoint_metric", "val_loss_legacy"),
                 "best_metric_value": payload.get("best_metric_value"),
                 "best_val_loss": payload.get("best_val_loss"),
+                "model_type": model_type,
                 "model_config": payload["model_config"],
                 "output_json": str(output_json),
             },

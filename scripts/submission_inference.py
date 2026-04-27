@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 from data.aux_features import compute_aux_features
 from data.transforms import NpzPatchNormalizer
-from models.query_cnn_transformer import QueryCNNTransformerClassifier, QueryCNNTransformerConfig
+from models.model_factory import build_model, build_model_config, normalize_model_type
 from preprocessing.constants import BAND_ORDER, INVALID_FILL_VALUE, PATCH_SIZE
 from preprocessing.dataset import build_patch_dataset
 from training.stage_decoding import maybe_decode_stages
@@ -140,18 +140,21 @@ def apply_crop_consistency(crop_logits: np.ndarray, query_rows: pd.DataFrame) ->
     return result
 
 
-def load_model(checkpoint: Path, device: torch.device) -> QueryCNNTransformerClassifier:
+def load_model(checkpoint: Path, device: torch.device):
     if not checkpoint.exists():
         raise FileNotFoundError(f"Missing trained checkpoint: {checkpoint}. Train in Colab and place it at checkpoints/model.pt before submitting.")
     payload = torch.load(checkpoint, map_location=device, weights_only=False)
-    config = QueryCNNTransformerConfig(**payload["model_config"])
-    model = QueryCNNTransformerClassifier(config)
+    model_type = normalize_model_type(payload.get("model_type", "query_cnn_transformer"))
+    config = build_model_config(model_type, payload["model_config"])
+    model = build_model(model_type, config)
     state = payload["model_state_dict"]
     if any(key.startswith("_orig_mod.") for key in state):
         state = {key.removeprefix("_orig_mod."): value for key, value in state.items()}
     model.load_state_dict(state)
     train_config = payload.get("train_config", {})
+    model.model_type = model_type
     model.aux_feature_set = str(payload.get("aux_feature_set") or train_config.get("aux_feature_set", "summary"))
+    model.use_relative_doy = bool(train_config.get("use_relative_doy", False))
     model.to(device)
     model.eval()
     return model
@@ -184,7 +187,7 @@ def _apply_relative_doy(
 
 def prepare_model_batch(
     *,
-    model: QueryCNNTransformerClassifier,
+    model,
     arrays: dict[str, np.ndarray],
     indices: np.ndarray,
     query_doys: np.ndarray,
@@ -228,7 +231,7 @@ def prepare_model_batch(
     return batch
 
 
-def forward_model(model: QueryCNNTransformerClassifier, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+def forward_model(model, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     return model(batch["patches"], batch["time_mask"], batch["time_doy"], batch["query_doy"], batch.get("aux_features"))
 
 
@@ -309,7 +312,7 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
 
     # Optional ensemble: extra checkpoints whose logits are averaged in.
     ensemble_paths = [resolve_path(p) for p in config.get("ensemble_checkpoints", [])]
-    ensemble_models: list[QueryCNNTransformerClassifier] = []
+    ensemble_models: list = []
     for ep in ensemble_paths:
         if ep.resolve() != crop_checkpoint.resolve():
             ensemble_models.append(load_model(ep, device))
@@ -318,12 +321,6 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
     with np.load(test_npz, allow_pickle=False) as npz:
         arrays = {name: npz[name] for name in npz.files}
     query_rows = read_query_rows(points_csv, arrays)
-
-    # Read use_relative_doy from checkpoint train_config (saved during training).
-    import torch as _torch
-    _ckpt_payload = _torch.load(crop_checkpoint, map_location="cpu", weights_only=False)
-    _train_cfg = _ckpt_payload.get("train_config", {})
-    use_relative_doy = bool(_train_cfg.get("use_relative_doy", False))
 
     batch_size = int(config.get("batch_size", 64))
     crop_logit_chunks: list[np.ndarray] = []
@@ -334,19 +331,43 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
         end = min(start + batch_size, len(query_rows))
         indices = sample_indices[start:end]
         batch_doys = query_doys[start:end]
-        crop_batch = prepare_model_batch(model=crop_model, arrays=arrays, indices=indices, query_doys=batch_doys, normalizer=normalizer, device=device, use_relative_doy=use_relative_doy)
+        crop_batch = prepare_model_batch(
+            model=crop_model,
+            arrays=arrays,
+            indices=indices,
+            query_doys=batch_doys,
+            normalizer=normalizer,
+            device=device,
+            use_relative_doy=bool(getattr(crop_model, "use_relative_doy", False)),
+        )
         with torch.no_grad():
             crop_outputs = forward_model(crop_model, crop_batch)
             if stage_model is crop_model:
                 stage_outputs = crop_outputs
             else:
-                stage_batch = prepare_model_batch(model=stage_model, arrays=arrays, indices=indices, query_doys=batch_doys, normalizer=normalizer, device=device, use_relative_doy=use_relative_doy)
+                stage_batch = prepare_model_batch(
+                    model=stage_model,
+                    arrays=arrays,
+                    indices=indices,
+                    query_doys=batch_doys,
+                    normalizer=normalizer,
+                    device=device,
+                    use_relative_doy=bool(getattr(stage_model, "use_relative_doy", False)),
+                )
                 stage_outputs = forward_model(stage_model, stage_batch)
             crop_logits_np = crop_outputs["crop_logits"].detach().cpu().numpy()
             stage_logits_np = stage_outputs["stage_logits"].detach().cpu().numpy()
             # Ensemble: average softmax over additional models
             for em in ensemble_models:
-                em_batch = prepare_model_batch(model=em, arrays=arrays, indices=indices, query_doys=batch_doys, normalizer=normalizer, device=device)
+                em_batch = prepare_model_batch(
+                    model=em,
+                    arrays=arrays,
+                    indices=indices,
+                    query_doys=batch_doys,
+                    normalizer=normalizer,
+                    device=device,
+                    use_relative_doy=bool(getattr(em, "use_relative_doy", False)),
+                )
                 em_out = forward_model(em, em_batch)
                 crop_logits_np = crop_logits_np + em_out["crop_logits"].detach().cpu().numpy()
                 stage_logits_np = stage_logits_np + em_out["stage_logits"].detach().cpu().numpy()
@@ -394,6 +415,10 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
         "stage_model_uses_mask_channels": bool(int(stage_model.config.in_channels) == 24),
         "crop_model_uses_aux_features": bool(int(crop_model.config.aux_feature_dim) > 0),
         "stage_model_uses_aux_features": bool(int(stage_model.config.aux_feature_dim) > 0),
+        "crop_model_type": str(getattr(crop_model, "model_type", "query_cnn_transformer")),
+        "stage_model_type": str(getattr(stage_model, "model_type", "query_cnn_transformer")),
+        "crop_model_uses_relative_doy": bool(getattr(crop_model, "use_relative_doy", False)),
+        "stage_model_uses_relative_doy": bool(getattr(stage_model, "use_relative_doy", False)),
         "model_uses_mask_channels": bool(int(crop_model.config.in_channels) == 24 or int(stage_model.config.in_channels) == 24),
         "model_uses_aux_features": bool(int(crop_model.config.aux_feature_dim) > 0 or int(stage_model.config.aux_feature_dim) > 0),
         "stage_postprocess": stage_postprocess,
