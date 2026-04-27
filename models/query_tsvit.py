@@ -69,6 +69,7 @@ class QueryTSViTConfig:
     aux_hidden_dim: int = 128
     aux_target: str = "shared"
     use_relative_query_bias: bool = True
+    use_direct_query_logit_bias: bool = True
 
 
 class QueryTSViTClassifier(nn.Module):
@@ -173,6 +174,19 @@ class QueryTSViTClassifier(nn.Module):
             nn.LayerNorm(config.transformer_dim),
             nn.Linear(config.transformer_dim, 1),
         )
+        if config.use_direct_query_logit_bias and config.use_query_doy:
+            direct_query_dim = config.transformer_dim * 2
+            self.crop_query_logit_bias = nn.Sequential(
+                nn.LayerNorm(direct_query_dim),
+                nn.Linear(direct_query_dim, config.num_crop_classes),
+            )
+            self.stage_query_logit_bias = nn.Sequential(
+                nn.LayerNorm(direct_query_dim),
+                nn.Linear(direct_query_dim, config.num_phenophase_classes),
+            )
+        else:
+            self.crop_query_logit_bias = None
+            self.stage_query_logit_bias = None
 
     def _encode_query_context(
         self,
@@ -257,4 +271,8 @@ class QueryTSViTClassifier(nn.Module):
 
         crop_logits = self.crop_head(crop_encoded).squeeze(-1)
         stage_logits = self.stage_head(stage_encoded).squeeze(-1)
+        if self.crop_query_logit_bias is not None and self.stage_query_logit_bias is not None:
+            direct_query = torch.cat([query_context, relative_context], dim=1)
+            crop_logits = crop_logits + self.crop_query_logit_bias(direct_query)
+            stage_logits = stage_logits + self.stage_query_logit_bias(direct_query)
         return {"crop_logits": crop_logits, "stage_logits": stage_logits}

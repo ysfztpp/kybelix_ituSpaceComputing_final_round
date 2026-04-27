@@ -9,6 +9,7 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise ImportError("torch is required for training.") from exc
 
+from preprocessing.constants import PHENOPHASE_STAGE_ID_TO_DOY_RANK
 from .stage_decoding import maybe_decode_stages
 
 
@@ -36,22 +37,28 @@ def query_loss(
         label_smoothing=label_smoothing,
     )
     weights = batch["stage_loss_weight"].float()
+    stage_rank_positions = torch.tensor(
+        PHENOPHASE_STAGE_ID_TO_DOY_RANK,
+        device=outputs["stage_logits"].device,
+        dtype=outputs["stage_logits"].dtype,
+    )
     if weights.sum() > 0:
         stage_loss = (per_row_stage * weights).sum() / weights.sum().clamp_min(1.0)
         stage_probabilities = torch.softmax(outputs["stage_logits"], dim=1)
-        stage_positions = torch.arange(stage_probabilities.shape[1], device=stage_probabilities.device, dtype=stage_probabilities.dtype)
+        stage_positions = stage_rank_positions
         expected_stage = (stage_probabilities * stage_positions.unsqueeze(0)).sum(dim=1)
-        target_stage = batch["phenophase_stage_id"].float()
+        target_stage = stage_rank_positions[batch["phenophase_stage_id"]]
         per_row_ordinal = nn.functional.smooth_l1_loss(expected_stage, target_stage, reduction="none")
         ordinal_stage_loss = (per_row_ordinal * weights).sum() / weights.sum().clamp_min(1.0)
     else:
         stage_loss = per_row_stage.mean() * 0.0
         ordinal_stage_loss = per_row_stage.mean() * 0.0
     sequence_stage_loss = stage_loss * 0.0
+    sequence_group_count = 0.0
     if float(stage_sequence_loss_weight) > 0.0:
         sequence_losses: list[torch.Tensor] = []
         stage_probabilities = torch.softmax(outputs["stage_logits"], dim=1)
-        stage_positions = torch.arange(stage_probabilities.shape[1], device=stage_probabilities.device, dtype=stage_probabilities.dtype)
+        stage_positions = stage_rank_positions
         expected_stage = (stage_probabilities * stage_positions.unsqueeze(0)).sum(dim=1)
         point_ids = batch["point_id"].detach().long()
         query_doys = batch["query_doy"].float()
@@ -67,6 +74,7 @@ def query_loss(
             overshoot_penalty = torch.relu(diffs - float(stage_max_forward_step))
             sequence_losses.append(backward_penalty.mean() + 0.5 * overshoot_penalty.mean())
         if sequence_losses:
+            sequence_group_count = float(len(sequence_losses))
             sequence_stage_loss = torch.stack(sequence_losses).mean()
     total = (
         crop_loss
@@ -80,6 +88,8 @@ def query_loss(
         "stage_loss": float(stage_loss.detach().cpu()),
         "ordinal_stage_loss": float(ordinal_stage_loss.detach().cpu()),
         "sequence_stage_loss": float(sequence_stage_loss.detach().cpu()),
+        "stage_supervised_count": float(weights.sum().detach().cpu()),
+        "sequence_group_count": sequence_group_count,
     }
 
 
@@ -113,7 +123,16 @@ def run_query_epoch(
     stage_postprocess: str = "none",
 ) -> dict[str, float]:
     model.train(train)
-    totals = {"loss": 0.0, "crop_loss": 0.0, "stage_loss": 0.0, "ordinal_stage_loss": 0.0, "sequence_stage_loss": 0.0, "count": 0.0}
+    totals = {
+        "loss": 0.0,
+        "crop_loss": 0.0,
+        "stage_loss": 0.0,
+        "ordinal_stage_loss": 0.0,
+        "sequence_stage_loss": 0.0,
+        "count": 0.0,
+        "stage_supervised_count": 0.0,
+        "sequence_group_count": 0.0,
+    }
     crop_true: list[int] = []
     crop_pred_all: list[int] = []
     stage_true_all: list[int] = []
@@ -174,9 +193,16 @@ def run_query_epoch(
             point_id_all.extend(batch["point_id"].detach().cpu().tolist())
             query_doy_all.extend(batch["query_doy"].detach().cpu().tolist())
             stage_logits_all.append(outputs["stage_logits"].detach().cpu())
-            for key in ["loss", "crop_loss", "stage_loss", "ordinal_stage_loss", "sequence_stage_loss"]:
-                totals[key] += parts[key] * batch_size
+            totals["loss"] += parts["loss"] * batch_size
+            totals["crop_loss"] += parts["crop_loss"] * batch_size
+            totals["stage_loss"] += parts["stage_loss"] * parts["stage_supervised_count"]
+            totals["ordinal_stage_loss"] += parts["ordinal_stage_loss"] * parts["stage_supervised_count"]
+            totals["sequence_stage_loss"] += parts["sequence_stage_loss"] * parts["sequence_group_count"]
+            totals["stage_supervised_count"] += parts["stage_supervised_count"]
+            totals["sequence_group_count"] += parts["sequence_group_count"]
     count = max(totals["count"], 1.0)
+    stage_supervised_count = max(totals["stage_supervised_count"], 1.0)
+    sequence_group_count = max(totals["sequence_group_count"], 1.0)
     stage_logits_tensor = torch.cat(stage_logits_all, dim=0) if stage_logits_all else torch.empty((0, 7), dtype=torch.float32)
     stage_pred_all = maybe_decode_stages(
         stage_logits_tensor,
@@ -193,9 +219,9 @@ def run_query_epoch(
     return {
         "loss": totals["loss"] / count,
         "crop_loss": totals["crop_loss"] / count,
-        "stage_loss": totals["stage_loss"] / count,
-        "ordinal_stage_loss": totals["ordinal_stage_loss"] / count,
-        "sequence_stage_loss": totals["sequence_stage_loss"] / count,
+        "stage_loss": totals["stage_loss"] / stage_supervised_count,
+        "ordinal_stage_loss": totals["ordinal_stage_loss"] / stage_supervised_count,
+        "sequence_stage_loss": totals["sequence_stage_loss"] / sequence_group_count,
         "crop_accuracy": sum(1.0 for truth, pred in zip(crop_true, crop_pred_all) if int(truth) == int(pred)) / count,
         "crop_macro_f1": _macro_f1(crop_true, crop_pred_all, range(3)),
         "stage_accuracy_all_crops": stage_correct / count,

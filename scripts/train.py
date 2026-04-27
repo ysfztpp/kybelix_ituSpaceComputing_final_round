@@ -234,6 +234,7 @@ def main() -> None:
         time_doy_dropout_prob=float(config.get("time_doy_dropout_prob", 0.0)),
         use_spectral_indices=use_spectral_indices,
         spectral_index_stats_json=spectral_index_stats_json,
+        use_relative_doy=bool(config.get("use_relative_doy", False)),
     )
     val_ds = QueryDatePatchDataset(
         npz_path=resolve_path(config["dataset_npz"]),
@@ -246,6 +247,7 @@ def main() -> None:
         aux_feature_set=aux_feature_set,
         use_spectral_indices=use_spectral_indices,
         spectral_index_stats_json=spectral_index_stats_json,
+        use_relative_doy=bool(config.get("use_relative_doy", False)),
     )
     if use_aux_features:
         model_config_data["aux_feature_dim"] = int(train_ds.aux_feature_dim)

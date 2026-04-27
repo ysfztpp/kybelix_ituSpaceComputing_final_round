@@ -4,6 +4,8 @@ from collections import defaultdict
 
 import torch
 
+from preprocessing.constants import PHENOPHASE_DOY_RANK_TO_STAGE_ID
+
 
 def _prefix_argmin(values: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     prefix_cost = torch.empty_like(values)
@@ -37,7 +39,8 @@ def monotonic_viterbi_decode(
     if stage_logits.shape[0] == 0:
         return torch.empty(0, dtype=torch.long)
 
-    log_probs = torch.log_softmax(stage_logits.detach().float().cpu(), dim=1)
+    stage_order = torch.tensor(PHENOPHASE_DOY_RANK_TO_STAGE_ID, dtype=torch.long)
+    log_probs = torch.log_softmax(stage_logits.detach().float().cpu()[:, stage_order], dim=1)
     costs = -log_probs
     point_ids_cpu = point_ids.detach().cpu().reshape(-1).tolist()
     query_doys_cpu = query_doys.detach().float().cpu().reshape(-1).tolist()
@@ -63,7 +66,7 @@ def monotonic_viterbi_decode(
             sequence[step] = state
             state = int(backptr[step, state].item())
         for ordered_index, row_index in enumerate(ordered):
-            decoded[row_index] = sequence[ordered_index]
+            decoded[row_index] = stage_order[int(sequence[ordered_index].item())]
     return decoded
 
 
@@ -83,7 +86,8 @@ def transition_viterbi_decode(
     if stage_logits.shape[0] == 0:
         return torch.empty(0, dtype=torch.long)
 
-    log_probs = torch.log_softmax(stage_logits.detach().float().cpu(), dim=1)
+    stage_order = torch.tensor(PHENOPHASE_DOY_RANK_TO_STAGE_ID, dtype=torch.long)
+    log_probs = torch.log_softmax(stage_logits.detach().float().cpu()[:, stage_order], dim=1)
     emission_costs = -log_probs
     stage_count = emission_costs.shape[1]
     transition = torch.full((stage_count, stage_count), fill_value=skip_cost, dtype=torch.float32)
@@ -124,7 +128,7 @@ def transition_viterbi_decode(
             sequence[step] = state
             state = int(backptr[step, state].item())
         for ordered_index, row_index in enumerate(ordered):
-            decoded[row_index] = sequence[ordered_index]
+            decoded[row_index] = stage_order[int(sequence[ordered_index].item())]
     return decoded
 
 

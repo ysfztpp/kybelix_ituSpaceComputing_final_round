@@ -10,6 +10,17 @@ PHENOPHASE_ORDER = [
     "Senescence",
     "Dormancy",
 ]
+PHENOPHASE_CHRONOLOGICAL_ORDER = [
+    "Greenup",
+    "MidGreenup",
+    "Maturity",
+    "Peak",
+    "Senescence",
+    "MidSenescence",
+    "Dormancy",
+]
+PHENOPHASE_DOY_RANK_TO_STAGE_ID = [PHENOPHASE_ORDER.index(name) for name in PHENOPHASE_CHRONOLOGICAL_ORDER]
+PHENOPHASE_STAGE_ID_TO_DOY_RANK = [PHENOPHASE_DOY_RANK_TO_STAGE_ID.index(stage_id) for stage_id in range(len(PHENOPHASE_ORDER))]
 CROP_TYPE_ORDER = ["corn", "rice", "soybean"]
 
 PATCH_SIZE = 15
