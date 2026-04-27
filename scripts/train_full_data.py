@@ -17,7 +17,7 @@ except ImportError as exc:  # pragma: no cover
 
 from data.query_dataset_npz import QueryDatePatchDataset
 from models.model_factory import build_model, build_model_config, config_asdict, normalize_model_type
-from scripts.train import build_scheduler, collect_git_metadata, resolve_path, seed_everything, select_device
+from scripts.train import build_loss_weight_tensors, build_scheduler, collect_git_metadata, resolve_path, seed_everything, select_device
 from training.query_engine import run_query_epoch
 
 
@@ -89,6 +89,7 @@ def main() -> None:
     model_config_data = dict(config.get("model", {}))
     model_config_data["aux_feature_dim"] = int(train_ds.aux_feature_dim) if use_aux_features else 0
     model_config = build_model_config(model_type, model_config_data)
+    crop_class_weights, stage_class_weights = build_loss_weight_tensors(train_ds, config, device)
 
     pin_memory = device.type == "cuda"
     train_loader = DataLoader(
@@ -142,9 +143,13 @@ def main() -> None:
             stage_sequence_loss_weight=float(config.get("stage_sequence_loss_weight", 0.0)),
             stage_max_forward_step=float(config.get("stage_max_forward_step", 1.75)),
             stage_postprocess=str(config.get("stage_postprocess", "none")),
+            crop_class_weights=crop_class_weights,
+            stage_class_weights=stage_class_weights,
+            point_crop_consistency_loss_weight=float(config.get("point_crop_consistency_loss_weight", 0.0)),
         )
         row = {"epoch": epoch, "lr": lr_used, **{f"train_{key}": value for key, value in train_metrics.items()}}
         row["train_competition_score"] = 0.4 * row["train_crop_macro_f1"] + 0.6 * row["train_rice_stage_macro_f1"]
+        row["train_competition_score_consistent"] = 0.4 * row["train_crop_macro_f1_consistent"] + 0.6 * row["train_rice_stage_macro_f1"]
         history.append(row)
         print(row)
         if scheduler is not None:

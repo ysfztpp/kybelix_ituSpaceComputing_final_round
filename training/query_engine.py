@@ -28,12 +28,21 @@ def query_loss(
     stage_ordinal_loss_weight: float = 0.0,
     stage_sequence_loss_weight: float = 0.0,
     stage_max_forward_step: float = 1.75,
+    crop_class_weights: torch.Tensor | None = None,
+    stage_class_weights: torch.Tensor | None = None,
+    point_crop_consistency_loss_weight: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    crop_loss = nn.functional.cross_entropy(outputs["crop_logits"], batch["crop_type_id"], label_smoothing=label_smoothing)
+    crop_loss = nn.functional.cross_entropy(
+        outputs["crop_logits"],
+        batch["crop_type_id"],
+        weight=crop_class_weights,
+        label_smoothing=label_smoothing,
+    )
     per_row_stage = nn.functional.cross_entropy(
         outputs["stage_logits"],
         batch["phenophase_stage_id"],
         reduction="none",
+        weight=stage_class_weights,
         label_smoothing=label_smoothing,
     )
     weights = batch["stage_loss_weight"].float()
@@ -76,11 +85,28 @@ def query_loss(
         if sequence_losses:
             sequence_group_count = float(len(sequence_losses))
             sequence_stage_loss = torch.stack(sequence_losses).mean()
+    point_crop_consistency_loss = crop_loss * 0.0
+    point_crop_group_count = 0.0
+    if float(point_crop_consistency_loss_weight) > 0.0:
+        crop_probabilities = torch.softmax(outputs["crop_logits"], dim=1)
+        point_ids = batch["point_id"].detach().long()
+        group_losses: list[torch.Tensor] = []
+        for point_id in torch.unique(point_ids):
+            indices = torch.where(point_ids == point_id)[0]
+            if indices.numel() < 2:
+                continue
+            group_probabilities = crop_probabilities[indices]
+            group_mean = group_probabilities.mean(dim=0, keepdim=True)
+            group_losses.append((group_probabilities - group_mean).pow(2).mean())
+        if group_losses:
+            point_crop_group_count = float(len(group_losses))
+            point_crop_consistency_loss = torch.stack(group_losses).mean()
     total = (
         crop_loss
         + stage_loss_weight * stage_loss
         + float(stage_ordinal_loss_weight) * ordinal_stage_loss
         + float(stage_sequence_loss_weight) * sequence_stage_loss
+        + float(point_crop_consistency_loss_weight) * point_crop_consistency_loss
     )
     return total, {
         "loss": float(total.detach().cpu()),
@@ -88,8 +114,10 @@ def query_loss(
         "stage_loss": float(stage_loss.detach().cpu()),
         "ordinal_stage_loss": float(ordinal_stage_loss.detach().cpu()),
         "sequence_stage_loss": float(sequence_stage_loss.detach().cpu()),
+        "point_crop_consistency_loss": float(point_crop_consistency_loss.detach().cpu()),
         "stage_supervised_count": float(weights.sum().detach().cpu()),
         "sequence_group_count": sequence_group_count,
+        "point_crop_group_count": point_crop_group_count,
     }
 
 
@@ -103,6 +131,18 @@ def _macro_f1(y_true: list[int], y_pred: list[int], labels: range) -> float:
         recall = tp / (tp + fn) if (tp + fn) else 0.0
         scores.append((2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0)
     return sum(scores) / max(len(scores), 1)
+
+
+def _apply_crop_consistency(crop_logits: torch.Tensor, point_ids: torch.Tensor) -> list[int]:
+    if crop_logits.numel() == 0:
+        return []
+    consistent = torch.empty(crop_logits.shape[0], dtype=torch.long)
+    for point_id in torch.unique(point_ids):
+        indices = torch.where(point_ids == point_id)[0]
+        summed_logits = crop_logits[indices].sum(dim=0)
+        majority_crop = int(summed_logits.argmax().item())
+        consistent[indices] = majority_crop
+    return consistent.tolist()
 
 
 def run_query_epoch(
@@ -121,6 +161,9 @@ def run_query_epoch(
     stage_sequence_loss_weight: float = 0.0,
     stage_max_forward_step: float = 1.75,
     stage_postprocess: str = "none",
+    crop_class_weights: torch.Tensor | None = None,
+    stage_class_weights: torch.Tensor | None = None,
+    point_crop_consistency_loss_weight: float = 0.0,
 ) -> dict[str, float]:
     model.train(train)
     totals = {
@@ -129,9 +172,11 @@ def run_query_epoch(
         "stage_loss": 0.0,
         "ordinal_stage_loss": 0.0,
         "sequence_stage_loss": 0.0,
+        "point_crop_consistency_loss": 0.0,
         "count": 0.0,
         "stage_supervised_count": 0.0,
         "sequence_group_count": 0.0,
+        "point_crop_group_count": 0.0,
     }
     crop_true: list[int] = []
     crop_pred_all: list[int] = []
@@ -140,6 +185,7 @@ def run_query_epoch(
     point_id_all: list[int] = []
     query_doy_all: list[float] = []
     stage_logits_all: list[torch.Tensor] = []
+    crop_logits_all: list[torch.Tensor] = []
     accumulation = max(1, int(gradient_accumulation_steps))
     context = torch.enable_grad() if train else torch.no_grad()
     if train:
@@ -164,6 +210,9 @@ def run_query_epoch(
                     stage_ordinal_loss_weight,
                     stage_sequence_loss_weight,
                     stage_max_forward_step,
+                    crop_class_weights,
+                    stage_class_weights,
+                    point_crop_consistency_loss_weight,
                 )
                 loss_for_backward = loss / accumulation
             if train:
@@ -193,28 +242,55 @@ def run_query_epoch(
             point_id_all.extend(batch["point_id"].detach().cpu().tolist())
             query_doy_all.extend(batch["query_doy"].detach().cpu().tolist())
             stage_logits_all.append(outputs["stage_logits"].detach().cpu())
+            crop_logits_all.append(outputs["crop_logits"].detach().cpu())
             totals["loss"] += parts["loss"] * batch_size
             totals["crop_loss"] += parts["crop_loss"] * batch_size
             totals["stage_loss"] += parts["stage_loss"] * parts["stage_supervised_count"]
             totals["ordinal_stage_loss"] += parts["ordinal_stage_loss"] * parts["stage_supervised_count"]
             totals["sequence_stage_loss"] += parts["sequence_stage_loss"] * parts["sequence_group_count"]
+            totals["point_crop_consistency_loss"] += parts["point_crop_consistency_loss"] * parts["point_crop_group_count"]
             totals["stage_supervised_count"] += parts["stage_supervised_count"]
             totals["sequence_group_count"] += parts["sequence_group_count"]
+            totals["point_crop_group_count"] += parts["point_crop_group_count"]
     count = max(totals["count"], 1.0)
     stage_supervised_count = max(totals["stage_supervised_count"], 1.0)
     sequence_group_count = max(totals["sequence_group_count"], 1.0)
+    point_crop_group_count = max(totals["point_crop_group_count"], 1.0)
     stage_logits_tensor = torch.cat(stage_logits_all, dim=0) if stage_logits_all else torch.empty((0, 7), dtype=torch.float32)
+    crop_logits_tensor = torch.cat(crop_logits_all, dim=0) if crop_logits_all else torch.empty((0, 3), dtype=torch.float32)
+    point_ids_tensor = torch.tensor(point_id_all, dtype=torch.long)
     stage_pred_all = maybe_decode_stages(
         stage_logits_tensor,
-        torch.tensor(point_id_all, dtype=torch.long),
+        point_ids_tensor,
         torch.tensor(query_doy_all, dtype=torch.float32),
         mode=stage_postprocess,
     ).tolist()
+    crop_pred_consistent_all = _apply_crop_consistency(crop_logits_tensor, point_ids_tensor)
     stage_correct = sum(1.0 for truth, pred in zip(stage_true_all, stage_pred_all) if int(truth) == int(pred))
     rice_indices = [index for index, weight in enumerate(stage_weight_all) if float(weight) > 0.0]
     rice_stage_true = [int(stage_true_all[index]) for index in rice_indices]
     rice_stage_pred = [int(stage_pred_all[index]) for index in rice_indices]
     rice_stage_correct = sum(1.0 for truth, pred in zip(rice_stage_true, rice_stage_pred) if truth == pred)
+    joint_correct = sum(
+        1.0
+        for crop_truth, crop_pred, stage_truth, stage_pred in zip(crop_true, crop_pred_all, stage_true_all, stage_pred_all)
+        if int(crop_truth) == int(crop_pred) and int(stage_truth) == int(stage_pred)
+    )
+    joint_correct_consistent = sum(
+        1.0
+        for crop_truth, crop_pred, stage_truth, stage_pred in zip(crop_true, crop_pred_consistent_all, stage_true_all, stage_pred_all)
+        if int(crop_truth) == int(crop_pred) and int(stage_truth) == int(stage_pred)
+    )
+    rice_joint_correct = sum(
+        1.0
+        for index in rice_indices
+        if int(crop_true[index]) == int(crop_pred_all[index]) and int(stage_true_all[index]) == int(stage_pred_all[index])
+    )
+    rice_joint_correct_consistent = sum(
+        1.0
+        for index in rice_indices
+        if int(crop_true[index]) == int(crop_pred_consistent_all[index]) and int(stage_true_all[index]) == int(stage_pred_all[index])
+    )
     rice_count = max(float(len(rice_indices)), 1.0)
     return {
         "loss": totals["loss"] / count,
@@ -222,11 +298,18 @@ def run_query_epoch(
         "stage_loss": totals["stage_loss"] / stage_supervised_count,
         "ordinal_stage_loss": totals["ordinal_stage_loss"] / stage_supervised_count,
         "sequence_stage_loss": totals["sequence_stage_loss"] / sequence_group_count,
+        "point_crop_consistency_loss": totals["point_crop_consistency_loss"] / point_crop_group_count,
         "crop_accuracy": sum(1.0 for truth, pred in zip(crop_true, crop_pred_all) if int(truth) == int(pred)) / count,
         "crop_macro_f1": _macro_f1(crop_true, crop_pred_all, range(3)),
+        "crop_accuracy_consistent": sum(1.0 for truth, pred in zip(crop_true, crop_pred_consistent_all) if int(truth) == int(pred)) / count,
+        "crop_macro_f1_consistent": _macro_f1(crop_true, crop_pred_consistent_all, range(3)),
         "stage_accuracy_all_crops": stage_correct / count,
         "rice_stage_accuracy": rice_stage_correct / rice_count,
         "rice_stage_macro_f1": _macro_f1(rice_stage_true, rice_stage_pred, range(7)),
+        "joint_accuracy": joint_correct / count,
+        "joint_accuracy_consistent": joint_correct_consistent / count,
+        "rice_joint_accuracy": rice_joint_correct / rice_count,
+        "rice_joint_accuracy_consistent": rice_joint_correct_consistent / rice_count,
     }
 
 
@@ -253,6 +336,9 @@ def fit_query(
     stage_sequence_loss_weight: float = 0.0,
     stage_max_forward_step: float = 1.75,
     stage_postprocess: str = "none",
+    crop_class_weights: torch.Tensor | None = None,
+    stage_class_weights: torch.Tensor | None = None,
+    point_crop_consistency_loss_weight: float = 0.0,
 ) -> list[dict[str, Any]]:
     history: list[dict[str, Any]] = []
     maximize_checkpoint_metric = "loss" not in checkpoint_metric.lower()
@@ -282,6 +368,9 @@ def fit_query(
             stage_sequence_loss_weight,
             stage_max_forward_step,
             stage_postprocess,
+            crop_class_weights,
+            stage_class_weights,
+            point_crop_consistency_loss_weight,
         )
         val_metrics = run_query_epoch(
             model,
@@ -299,10 +388,14 @@ def fit_query(
             stage_sequence_loss_weight,
             stage_max_forward_step,
             stage_postprocess,
+            crop_class_weights,
+            stage_class_weights,
+            point_crop_consistency_loss_weight,
         )
         row = {"epoch": epoch, "lr": lr_used, **{f"train_{k}": v for k, v in train_metrics.items()}, **{f"val_{k}": v for k, v in val_metrics.items()}}
         for prefix in ("train", "val"):
             row[f"{prefix}_competition_score"] = 0.4 * row[f"{prefix}_crop_macro_f1"] + 0.6 * row[f"{prefix}_rice_stage_macro_f1"]
+            row[f"{prefix}_competition_score_consistent"] = 0.4 * row[f"{prefix}_crop_macro_f1_consistent"] + 0.6 * row[f"{prefix}_rice_stage_macro_f1"]
         history.append(row)
         print(row)
 

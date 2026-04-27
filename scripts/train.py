@@ -103,6 +103,49 @@ def collect_git_metadata() -> dict[str, Any]:
     }
 
 
+def build_class_weights(
+    labels: list[int],
+    num_classes: int,
+    mode: str | None,
+    device: torch.device,
+) -> torch.Tensor | None:
+    normalized_mode = str(mode or "none").strip().lower()
+    if normalized_mode in {"none", "", "false"}:
+        return None
+    counts = np.bincount(np.asarray(labels, dtype=np.int64), minlength=int(num_classes)).astype(np.float32)
+    counts = np.maximum(counts, 1.0)
+    if normalized_mode == "inverse_freq":
+        weights = 1.0 / counts
+    elif normalized_mode == "sqrt_inverse_freq":
+        weights = 1.0 / np.sqrt(counts)
+    else:
+        raise ValueError(f"unsupported class-weight mode: {mode}")
+    weights = weights * (float(num_classes) / float(weights.sum()))
+    return torch.tensor(weights, dtype=torch.float32, device=device)
+
+
+def build_loss_weight_tensors(
+    train_ds: QueryDatePatchDataset,
+    config: dict[str, Any],
+    device: torch.device,
+) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+    crop_labels = [int(row[3]) for row in train_ds.rows]
+    stage_labels = [int(row[1]) for row in train_ds.rows if float(row[4]) > 0.0]
+    crop_weights = build_class_weights(
+        crop_labels,
+        num_classes=3,
+        mode=config.get("crop_class_weight_mode", "none"),
+        device=device,
+    )
+    stage_weights = build_class_weights(
+        stage_labels,
+        num_classes=7,
+        mode=config.get("stage_class_weight_mode", "none"),
+        device=device,
+    )
+    return crop_weights, stage_weights
+
+
 def _with_derived_scores(row: dict[str, Any]) -> dict[str, Any]:
     """Make every history row contain the same score fields."""
 
@@ -155,13 +198,18 @@ def write_metrics_summary(
         "best_val_competition_score": best.get("val_competition_score"),
         "best_val_loss": best.get("val_loss"),
         "best_val_crop_macro_f1": best.get("val_crop_macro_f1"),
+        "best_val_crop_macro_f1_consistent": best.get("val_crop_macro_f1_consistent"),
         "best_val_rice_stage_macro_f1": best.get("val_rice_stage_macro_f1"),
         "best_val_crop_accuracy": best.get("val_crop_accuracy"),
+        "best_val_crop_accuracy_consistent": best.get("val_crop_accuracy_consistent"),
         "best_val_rice_stage_accuracy": best.get("val_rice_stage_accuracy"),
+        "best_val_joint_accuracy": best.get("val_joint_accuracy"),
+        "best_val_joint_accuracy_consistent": best.get("val_joint_accuracy_consistent"),
         "best_train_competition_score": best.get("train_competition_score"),
         "train_val_score_gap": float(best.get("train_competition_score", 0.0)) - float(best.get("val_competition_score", 0.0)),
         "final_epoch": final.get("epoch"),
         "final_val_competition_score": final.get("val_competition_score"),
+        "final_val_competition_score_consistent": final.get("val_competition_score_consistent"),
         "final_val_loss": final.get("val_loss"),
         "model_config": config_asdict(model_config),
         "git": git_metadata,
@@ -254,6 +302,7 @@ def main() -> None:
     else:
         model_config_data["aux_feature_dim"] = 0
     model_config = build_model_config(model_type, model_config_data)
+    crop_class_weights, stage_class_weights = build_loss_weight_tensors(train_ds, config, device)
 
     pin_memory = device.type == "cuda"
     train_loader = DataLoader(train_ds, batch_size=int(config["batch_size"]), shuffle=True, num_workers=int(config.get("num_workers", 0)), pin_memory=pin_memory)
@@ -299,6 +348,9 @@ def main() -> None:
         stage_sequence_loss_weight=float(config.get("stage_sequence_loss_weight", 0.0)),
         stage_max_forward_step=float(config.get("stage_max_forward_step", 1.75)),
         stage_postprocess=str(config.get("stage_postprocess", "none")),
+        crop_class_weights=crop_class_weights,
+        stage_class_weights=stage_class_weights,
+        point_crop_consistency_loss_weight=float(config.get("point_crop_consistency_loss_weight", 0.0)),
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "history.json").write_text(json.dumps(history, indent=2))
