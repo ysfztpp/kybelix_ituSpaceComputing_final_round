@@ -6,7 +6,6 @@ import math
 import random
 import subprocess
 import sys
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 import numpy as np
 
 from data.query_dataset_npz import QueryDatePatchDataset
-from models.query_cnn_transformer import QueryCNNTransformerClassifier, QueryCNNTransformerConfig
+from models.model_factory import build_model, build_model_config, config_asdict, normalize_model_type
 from training.query_engine import fit_query
 
 try:
@@ -137,7 +136,7 @@ def write_metrics_summary(
     output_dir: Path,
     history: list[dict[str, Any]],
     config: dict[str, Any],
-    model_config: QueryCNNTransformerConfig,
+    model_config: Any,
     git_metadata: dict[str, Any],
 ) -> None:
     """Write a compact table row next to every trained model."""
@@ -164,7 +163,7 @@ def write_metrics_summary(
         "final_epoch": final.get("epoch"),
         "final_val_competition_score": final.get("val_competition_score"),
         "final_val_loss": final.get("val_loss"),
-        "model_config": asdict(model_config),
+        "model_config": config_asdict(model_config),
         "git": git_metadata,
     }
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -197,6 +196,7 @@ def main() -> None:
     seed_everything(int(config.get("seed", 42)))
     device = select_device(str(config.get("device", "auto")))
     preserve_output_dir = bool(config.get("preserve_output_dir", False))
+    model_type = normalize_model_type(config.get("model_type", "query_cnn_transformer"))
 
     model_config_data = dict(config.get("model", {}))
     if args.no_query_date:
@@ -251,13 +251,13 @@ def main() -> None:
         model_config_data["aux_feature_dim"] = int(train_ds.aux_feature_dim)
     else:
         model_config_data["aux_feature_dim"] = 0
-    model_config = QueryCNNTransformerConfig(**{key: value for key, value in model_config_data.items() if key in QueryCNNTransformerConfig.__annotations__})
+    model_config = build_model_config(model_type, model_config_data)
 
     pin_memory = device.type == "cuda"
     train_loader = DataLoader(train_ds, batch_size=int(config["batch_size"]), shuffle=True, num_workers=int(config.get("num_workers", 0)), pin_memory=pin_memory)
     val_loader = DataLoader(val_ds, batch_size=int(config["batch_size"]), shuffle=False, num_workers=int(config.get("num_workers", 0)), pin_memory=pin_memory)
 
-    model = QueryCNNTransformerClassifier(model_config).to(device)
+    model = build_model(model_type, model_config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(config["learning_rate"]), weight_decay=float(config.get("weight_decay", 0.01)))
     epochs = int(args.epochs or config.get("epochs", 10))
     scheduler = build_scheduler(config, optimizer, epochs)
@@ -265,7 +265,8 @@ def main() -> None:
     git_metadata = collect_git_metadata()
 
     payload = {
-        "model_config": asdict(model_config),
+        "model_type": model_type,
+        "model_config": config_asdict(model_config),
         "train_config": config,
         "device": str(device),
         "task": "point_date_crop_stage_classification",

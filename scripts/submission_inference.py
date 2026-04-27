@@ -354,14 +354,15 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
         stage_logit_chunks.append(stage_logits_np)
 
     crop_logits_all = np.concatenate(crop_logit_chunks, axis=0)
-    # Enforce one crop label per spatial point (sum logits across all query rows).
-    use_bijection = config.get("use_point_stage_bijection", True)
-    if use_bijection:
+    # Crop type should be point-consistent regardless of stage decoding policy.
+    use_crop_consistency = bool(config.get("use_crop_consistency", True))
+    if use_crop_consistency:
         crop_pred = apply_crop_consistency(crop_logits_all, query_rows)
     else:
         crop_pred = crop_logits_all.argmax(axis=1)
     stage_logits = np.concatenate(stage_logit_chunks, axis=0)
     stage_postprocess = str(config.get("stage_postprocess", "none"))
+    use_bijection = bool(config.get("use_point_stage_bijection", True))
     stage_pred = maybe_decode_stages(
         torch.from_numpy(stage_logits),
         torch.from_numpy(query_rows["point_id"].to_numpy(dtype=np.int64)),
@@ -387,6 +388,7 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
         "crop_checkpoint": str(crop_checkpoint),
         "stage_checkpoint": str(stage_checkpoint),
         "ensemble_checkpoints": [str(p) for p in ensemble_paths],
+        "use_crop_consistency": bool(use_crop_consistency),
         "use_point_stage_bijection": bool(use_bijection),
         "crop_model_uses_mask_channels": bool(int(crop_model.config.in_channels) == 24),
         "stage_model_uses_mask_channels": bool(int(stage_model.config.in_channels) == 24),

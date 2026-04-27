@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +16,7 @@ except ImportError as exc:  # pragma: no cover
     raise ImportError("torch is required. In Colab run with a PyTorch runtime.") from exc
 
 from data.query_dataset_npz import QueryDatePatchDataset
-from models.query_cnn_transformer import QueryCNNTransformerClassifier, QueryCNNTransformerConfig
+from models.model_factory import build_model, build_model_config, config_asdict, normalize_model_type
 from scripts.train import build_scheduler, collect_git_metadata, resolve_path, seed_everything, select_device
 from training.query_engine import run_query_epoch
 
@@ -62,6 +61,7 @@ def main() -> None:
     config = json.loads(resolve_path(args.config).read_text())
     seed_everything(int(config.get("seed", 42)))
     device = select_device(str(config.get("device", "auto")))
+    model_type = normalize_model_type(config.get("model_type", "query_cnn_transformer"))
 
     use_aux_features = bool(config.get("use_aux_features", False))
     aux_feature_set = str(config.get("aux_feature_set", "summary"))
@@ -87,7 +87,7 @@ def main() -> None:
 
     model_config_data = dict(config.get("model", {}))
     model_config_data["aux_feature_dim"] = int(train_ds.aux_feature_dim) if use_aux_features else 0
-    model_config = QueryCNNTransformerConfig(**{key: value for key, value in model_config_data.items() if key in QueryCNNTransformerConfig.__annotations__})
+    model_config = build_model_config(model_type, model_config_data)
 
     pin_memory = device.type == "cuda"
     train_loader = DataLoader(
@@ -98,7 +98,7 @@ def main() -> None:
         pin_memory=pin_memory,
     )
 
-    model = QueryCNNTransformerClassifier(model_config).to(device)
+    model = build_model(model_type, model_config).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=float(config["learning_rate"]),
@@ -111,7 +111,8 @@ def main() -> None:
     git_metadata = collect_git_metadata()
 
     payload = {
-        "model_config": asdict(model_config),
+        "model_type": model_type,
+        "model_config": config_asdict(model_config),
         "train_config": config,
         "device": str(device),
         "task": "point_date_crop_stage_classification_full_data_fixed_epoch",
@@ -160,7 +161,7 @@ def main() -> None:
         "train_queries": len(train_ds),
         "final_train_competition_score": history[-1].get("train_competition_score") if history else None,
         "final_train_loss": history[-1].get("train_loss") if history else None,
-        "model_config": asdict(model_config),
+        "model_config": config_asdict(model_config),
         "git": git_metadata,
     }
     (output_dir / "metrics_summary.json").write_text(json.dumps(summary, indent=2))
