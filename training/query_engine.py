@@ -24,7 +24,9 @@ def query_loss(
     outputs: dict[str, torch.Tensor],
     batch: dict[str, torch.Tensor],
     stage_loss_weight: float,
+    crop_loss_weight: float = 1.0,
     label_smoothing: float = 0.0,
+    stage_label_smoothing: float | None = None,
     stage_ordinal_loss_weight: float = 0.0,
     stage_sequence_loss_weight: float = 0.0,
     stage_max_forward_step: float = 1.75,
@@ -38,12 +40,13 @@ def query_loss(
         weight=crop_class_weights,
         label_smoothing=label_smoothing,
     )
+    stage_smoothing = float(label_smoothing if stage_label_smoothing is None else stage_label_smoothing)
     per_row_stage = nn.functional.cross_entropy(
         outputs["stage_logits"],
         batch["phenophase_stage_id"],
         reduction="none",
         weight=stage_class_weights,
-        label_smoothing=label_smoothing,
+        label_smoothing=stage_smoothing,
     )
     weights = batch["stage_loss_weight"].float()
     stage_rank_positions = torch.tensor(
@@ -102,7 +105,7 @@ def query_loss(
             point_crop_group_count = float(len(group_losses))
             point_crop_consistency_loss = torch.stack(group_losses).mean()
     total = (
-        crop_loss
+        float(crop_loss_weight) * crop_loss
         + stage_loss_weight * stage_loss
         + float(stage_ordinal_loss_weight) * ordinal_stage_loss
         + float(stage_sequence_loss_weight) * sequence_stage_loss
@@ -152,11 +155,13 @@ def run_query_epoch(
     device,
     train: bool,
     stage_loss_weight: float,
+    crop_loss_weight: float = 1.0,
     amp: bool = False,
     scaler: Any | None = None,
     gradient_accumulation_steps: int = 1,
     clip_grad_norm: float = 1.0,
     label_smoothing: float = 0.0,
+    stage_label_smoothing: float | None = None,
     stage_ordinal_loss_weight: float = 0.0,
     stage_sequence_loss_weight: float = 0.0,
     stage_max_forward_step: float = 1.75,
@@ -206,7 +211,9 @@ def run_query_epoch(
                     outputs,
                     batch,
                     stage_loss_weight,
+                    crop_loss_weight,
                     label_smoothing,
+                    stage_label_smoothing,
                     stage_ordinal_loss_weight,
                     stage_sequence_loss_weight,
                     stage_max_forward_step,
@@ -321,6 +328,7 @@ def fit_query(
     device,
     epochs: int,
     stage_loss_weight: float,
+    crop_loss_weight: float = 1.0,
     output_dir: Path | None = None,
     scheduler: Any | None = None,
     amp: bool = False,
@@ -332,6 +340,7 @@ def fit_query(
     checkpoint_metric: str = "val_loss",
     tie_breaker_metric: str = "val_loss",
     label_smoothing: float = 0.0,
+    stage_label_smoothing: float | None = None,
     stage_ordinal_loss_weight: float = 0.0,
     stage_sequence_loss_weight: float = 0.0,
     stage_max_forward_step: float = 1.75,
@@ -359,11 +368,13 @@ def fit_query(
             device,
             True,
             stage_loss_weight,
+            crop_loss_weight,
             amp,
             scaler,
             gradient_accumulation_steps,
             clip_grad_norm,
             label_smoothing,
+            stage_label_smoothing,
             stage_ordinal_loss_weight,
             stage_sequence_loss_weight,
             stage_max_forward_step,
@@ -379,11 +390,13 @@ def fit_query(
             device,
             False,
             stage_loss_weight,
+            crop_loss_weight,
             False,
             None,
             1,
             clip_grad_norm,
             0.0,
+            0.0 if stage_label_smoothing is None else stage_label_smoothing,
             stage_ordinal_loss_weight,
             stage_sequence_loss_weight,
             stage_max_forward_step,

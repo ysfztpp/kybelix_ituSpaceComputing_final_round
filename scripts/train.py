@@ -67,6 +67,28 @@ def build_scheduler(config: dict[str, Any], optimizer: torch.optim.Optimizer, ep
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
 
+def build_dataloader_kwargs(
+    *,
+    batch_size: int,
+    shuffle: bool,
+    num_workers: int,
+    pin_memory: bool,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "batch_size": int(batch_size),
+        "shuffle": bool(shuffle),
+        "num_workers": int(num_workers),
+        "pin_memory": bool(pin_memory),
+    }
+    if int(num_workers) > 0:
+        kwargs["persistent_workers"] = bool(config.get("persistent_workers", False))
+        prefetch_factor = config.get("prefetch_factor")
+        if prefetch_factor is not None:
+            kwargs["prefetch_factor"] = int(prefetch_factor)
+    return kwargs
+
+
 def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -305,8 +327,27 @@ def main() -> None:
     crop_class_weights, stage_class_weights = build_loss_weight_tensors(train_ds, config, device)
 
     pin_memory = device.type == "cuda"
-    train_loader = DataLoader(train_ds, batch_size=int(config["batch_size"]), shuffle=True, num_workers=int(config.get("num_workers", 0)), pin_memory=pin_memory)
-    val_loader = DataLoader(val_ds, batch_size=int(config["batch_size"]), shuffle=False, num_workers=int(config.get("num_workers", 0)), pin_memory=pin_memory)
+    num_workers = int(config.get("num_workers", 0))
+    train_loader = DataLoader(
+        train_ds,
+        **build_dataloader_kwargs(
+            batch_size=int(config["batch_size"]),
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            config=config,
+        ),
+    )
+    val_loader = DataLoader(
+        val_ds,
+        **build_dataloader_kwargs(
+            batch_size=int(config["batch_size"]),
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            config=config,
+        ),
+    )
 
     model = build_model(model_type, model_config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(config["learning_rate"]), weight_decay=float(config.get("weight_decay", 0.01)))
@@ -333,6 +374,7 @@ def main() -> None:
         device=device,
         epochs=epochs,
         stage_loss_weight=float(config.get("stage_loss_weight", 0.6)),
+        crop_loss_weight=float(config.get("crop_loss_weight", 1.0)),
         output_dir=output_dir,
         scheduler=scheduler,
         amp=bool(config.get("amp", False)),
@@ -344,6 +386,7 @@ def main() -> None:
         checkpoint_metric=str(config.get("checkpoint_metric", "val_loss")),
         tie_breaker_metric=str(config.get("tie_breaker_metric", "val_loss")),
         label_smoothing=float(config.get("label_smoothing", 0.0)),
+        stage_label_smoothing=config.get("stage_label_smoothing"),
         stage_ordinal_loss_weight=float(config.get("stage_ordinal_loss_weight", 0.0)),
         stage_sequence_loss_weight=float(config.get("stage_sequence_loss_weight", 0.0)),
         stage_max_forward_step=float(config.get("stage_max_forward_step", 1.75)),

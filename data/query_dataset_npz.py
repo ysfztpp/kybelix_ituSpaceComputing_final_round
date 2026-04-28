@@ -81,6 +81,8 @@ class QueryDatePatchDataset(Dataset):
         use_aux_features: bool = False,
         aux_feature_set: str = "summary",
         random_time_shift_days: int = 0,
+        fixed_time_shift_days: float = 0.0,
+        fixed_query_doy_shift_days: float | None = None,
         query_doy_dropout_prob: float = 0.0,
         time_doy_dropout_prob: float = 0.0,
         use_spectral_indices: bool = False,
@@ -106,11 +108,17 @@ class QueryDatePatchDataset(Dataset):
         self.use_aux_features = bool(use_aux_features)
         self.aux_feature_set = str(aux_feature_set)
         self.random_time_shift_days = int(random_time_shift_days)
+        self.fixed_time_shift_days = float(fixed_time_shift_days)
+        self.fixed_query_doy_shift_days = (
+            float(self.fixed_time_shift_days) if fixed_query_doy_shift_days is None else float(fixed_query_doy_shift_days)
+        )
         self.query_doy_dropout_prob = float(query_doy_dropout_prob)
         self.time_doy_dropout_prob = float(time_doy_dropout_prob)
-        self.enable_temporal_augmentation = self.split == "train" and (
+        self.apply_random_temporal_augmentation = self.split == "train" and (
             self.random_time_shift_days > 0 or self.query_doy_dropout_prob > 0.0 or self.time_doy_dropout_prob > 0.0
         )
+        self.has_fixed_temporal_shift = abs(self.fixed_time_shift_days) > 0.0 or abs(self.fixed_query_doy_shift_days) > 0.0
+        self.enable_temporal_augmentation = self.apply_random_temporal_augmentation or self.has_fixed_temporal_shift
         self.use_spectral_indices = bool(use_spectral_indices)
         self.use_relative_doy = bool(use_relative_doy)
         if self.use_spectral_indices:
@@ -150,8 +158,9 @@ class QueryDatePatchDataset(Dataset):
                 for row_index, (sample_index, _stage_index, query_doy, _crop_id, _stage_weight) in enumerate(rows)
             ]
         self.rows = rows
+        self._cache_aux_features = self.use_aux_features and not self.enable_temporal_augmentation
         self._aux_features: np.ndarray | None = None
-        if self.use_aux_features:
+        if self._cache_aux_features:
             self._aux_features = np.stack(
                 [
                     compute_aux_features(
@@ -203,7 +212,13 @@ class QueryDatePatchDataset(Dataset):
         time_doy = self.arrays["time_doy"][sample_index].astype(np.float32).copy()
         query_doy_value = float(query_doy)
         query_doy_mask = 1.0
-        if self.enable_temporal_augmentation:
+        if self.has_fixed_temporal_shift:
+            positive_mask = time_doy > 0
+            if abs(self.fixed_time_shift_days) > 0.0:
+                time_doy[positive_mask] = np.clip(time_doy[positive_mask] + self.fixed_time_shift_days, 1.0, 366.0)
+            if abs(self.fixed_query_doy_shift_days) > 0.0:
+                query_doy_value = float(np.clip(query_doy_value + self.fixed_query_doy_shift_days, 1.0, 366.0))
+        if self.apply_random_temporal_augmentation:
             if self.random_time_shift_days > 0:
                 shift = float(np.random.randint(-self.random_time_shift_days, self.random_time_shift_days + 1))
                 positive_mask = time_doy > 0
@@ -216,6 +231,25 @@ class QueryDatePatchDataset(Dataset):
             if self.query_doy_dropout_prob > 0.0 and float(np.random.random()) < self.query_doy_dropout_prob:
                 query_doy_value = 0.0
                 query_doy_mask = 0.0
+        aux_features: np.ndarray | None = None
+        if self.use_aux_features:
+            if self._cache_aux_features:
+                if self._aux_features is None:
+                    raise RuntimeError("aux feature cache was not initialized")
+                aux_features = self._aux_features[item]
+            else:
+                if query_doy_mask <= 0.0:
+                    aux_features = np.zeros(self.aux_feature_dim, dtype=np.float32)
+                else:
+                    aux_features = compute_aux_features(
+                        raw_patches,
+                        valid_pixel_mask,
+                        self.arrays["time_mask"][sample_index],
+                        time_doy,
+                        query_doy_value,
+                        self.bands,
+                        feature_set=self.aux_feature_set,
+                    ).astype(np.float32, copy=False)
         if self.use_relative_doy:
             # Subtract series temporal center so the model sees relative dates.
             # Computed after augmentation so shifts cancel out automatically.
@@ -239,8 +273,6 @@ class QueryDatePatchDataset(Dataset):
             "sample_index": int(sample_index),
             "point_id": int(self.arrays["point_id"][sample_index]),
         }
-        if self.use_aux_features:
-            if self._aux_features is None:
-                raise RuntimeError("aux feature cache was not initialized")
-            sample["aux_features"] = torch.from_numpy(self._aux_features[item])
+        if aux_features is not None:
+            sample["aux_features"] = torch.from_numpy(aux_features.astype(np.float32, copy=False))
         return sample

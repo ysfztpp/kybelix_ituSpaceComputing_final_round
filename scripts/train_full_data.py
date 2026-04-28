@@ -17,7 +17,7 @@ except ImportError as exc:  # pragma: no cover
 
 from data.query_dataset_npz import QueryDatePatchDataset
 from models.model_factory import build_model, build_model_config, config_asdict, normalize_model_type
-from scripts.train import build_loss_weight_tensors, build_scheduler, collect_git_metadata, resolve_path, seed_everything, select_device
+from scripts.train import build_dataloader_kwargs, build_loss_weight_tensors, build_scheduler, collect_git_metadata, resolve_path, seed_everything, select_device
 from training.query_engine import run_query_epoch
 
 
@@ -92,12 +92,16 @@ def main() -> None:
     crop_class_weights, stage_class_weights = build_loss_weight_tensors(train_ds, config, device)
 
     pin_memory = device.type == "cuda"
+    num_workers = int(config.get("num_workers", 0))
     train_loader = DataLoader(
         train_ds,
-        batch_size=int(config["batch_size"]),
-        shuffle=True,
-        num_workers=int(config.get("num_workers", 0)),
-        pin_memory=pin_memory,
+        **build_dataloader_kwargs(
+            batch_size=int(config["batch_size"]),
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            config=config,
+        ),
     )
 
     model = build_model(model_type, model_config).to(device)
@@ -134,11 +138,13 @@ def main() -> None:
             device=device,
             train=True,
             stage_loss_weight=float(config.get("stage_loss_weight", 0.6)),
+            crop_loss_weight=float(config.get("crop_loss_weight", 1.0)),
             amp=bool(config.get("amp", False)),
             scaler=scaler,
             gradient_accumulation_steps=int(config.get("gradient_accumulation_steps", 1)),
             clip_grad_norm=float(config.get("clip_grad_norm", 1.0)),
             label_smoothing=float(config.get("label_smoothing", 0.0)),
+            stage_label_smoothing=config.get("stage_label_smoothing"),
             stage_ordinal_loss_weight=float(config.get("stage_ordinal_loss_weight", 0.0)),
             stage_sequence_loss_weight=float(config.get("stage_sequence_loss_weight", 0.0)),
             stage_max_forward_step=float(config.get("stage_max_forward_step", 1.75)),
