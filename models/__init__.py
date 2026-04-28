@@ -3,6 +3,7 @@
 from .model_factory import MODEL_TYPES, build_model, build_model_config, config_asdict, normalize_model_type
 from .query_cnn_transformer import QueryCNNTransformerClassifier, QueryCNNTransformerConfig
 from .query_tsvit import QueryTSViTClassifier, QueryTSViTConfig
+from .season_timeline_transformer import SeasonTimelineTransformerClassifier, SeasonTimelineTransformerConfig
 
 __all__ = [
     "MODEL_TYPES",
@@ -14,4 +15,6 @@ __all__ = [
     "QueryCNNTransformerConfig",
     "QueryTSViTClassifier",
     "QueryTSViTConfig",
+    "SeasonTimelineTransformerClassifier",
+    "SeasonTimelineTransformerConfig",
 ]

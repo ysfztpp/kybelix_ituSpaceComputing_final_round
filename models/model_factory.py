@@ -5,10 +5,12 @@ from typing import Any
 
 from .query_cnn_transformer import QueryCNNTransformerClassifier, QueryCNNTransformerConfig
 from .query_tsvit import QueryTSViTClassifier, QueryTSViTConfig
+from .season_timeline_transformer import SeasonTimelineTransformerClassifier, SeasonTimelineTransformerConfig
 
 MODEL_TYPES = {
     "query_cnn_transformer": (QueryCNNTransformerConfig, QueryCNNTransformerClassifier),
     "query_tsvit": (QueryTSViTConfig, QueryTSViTClassifier),
+    "season_timeline_transformer": (SeasonTimelineTransformerConfig, SeasonTimelineTransformerClassifier),
 }
 
 
