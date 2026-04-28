@@ -79,6 +79,8 @@ def main() -> None:
         use_aux_features=use_aux_features,
         aux_feature_set=aux_feature_set,
         random_time_shift_days=int(config.get("random_time_shift_days", 0)),
+        random_query_shift_days=int(config.get("random_query_shift_days", 0)),
+        random_query_shift_prob=float(config.get("random_query_shift_prob", 1.0)),
         query_doy_dropout_prob=float(config.get("query_doy_dropout_prob", 0.0)),
         time_doy_dropout_prob=float(config.get("time_doy_dropout_prob", 0.0)),
         use_spectral_indices=use_spectral_indices,

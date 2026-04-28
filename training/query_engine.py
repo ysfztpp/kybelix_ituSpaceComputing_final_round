@@ -348,6 +348,7 @@ def fit_query(
     crop_class_weights: torch.Tensor | None = None,
     stage_class_weights: torch.Tensor | None = None,
     point_crop_consistency_loss_weight: float = 0.0,
+    extra_val_loaders: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     history: list[dict[str, Any]] = []
     maximize_checkpoint_metric = "loss" not in checkpoint_metric.lower()
@@ -406,6 +407,37 @@ def fit_query(
             point_crop_consistency_loss_weight,
         )
         row = {"epoch": epoch, "lr": lr_used, **{f"train_{k}": v for k, v in train_metrics.items()}, **{f"val_{k}": v for k, v in val_metrics.items()}}
+        if extra_val_loaders:
+            for name, loader in extra_val_loaders.items():
+                extra_metrics = run_query_epoch(
+                    model,
+                    loader,
+                    optimizer,
+                    device,
+                    False,
+                    stage_loss_weight,
+                    crop_loss_weight,
+                    False,
+                    None,
+                    1,
+                    clip_grad_norm,
+                    0.0,
+                    0.0 if stage_label_smoothing is None else stage_label_smoothing,
+                    stage_ordinal_loss_weight,
+                    stage_sequence_loss_weight,
+                    stage_max_forward_step,
+                    stage_postprocess,
+                    crop_class_weights,
+                    stage_class_weights,
+                    point_crop_consistency_loss_weight,
+                )
+                row.update({f"val_{name}_{key}": value for key, value in extra_metrics.items()})
+            if "query_shift_plus" in extra_val_loaders and "query_shift_minus" in extra_val_loaders:
+                for metric in ("rice_stage_macro_f1", "rice_stage_accuracy", "stage_accuracy_all_crops", "joint_accuracy"):
+                    plus = float(row[f"val_query_shift_plus_{metric}"])
+                    minus = float(row[f"val_query_shift_minus_{metric}"])
+                    row[f"val_query_shift_avg_{metric}"] = 0.5 * (plus + minus)
+                    row[f"val_query_shift_worst_{metric}"] = min(plus, minus)
         for prefix in ("train", "val"):
             row[f"{prefix}_competition_score"] = 0.4 * row[f"{prefix}_crop_macro_f1"] + 0.6 * row[f"{prefix}_rice_stage_macro_f1"]
             row[f"{prefix}_competition_score_consistent"] = 0.4 * row[f"{prefix}_crop_macro_f1_consistent"] + 0.6 * row[f"{prefix}_rice_stage_macro_f1"]

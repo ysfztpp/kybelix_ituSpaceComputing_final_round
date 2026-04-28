@@ -236,6 +236,19 @@ def write_metrics_summary(
         "model_config": config_asdict(model_config),
         "git": git_metadata,
     }
+    for key in (
+        "best_val_query_shift_avg_rice_stage_macro_f1",
+        "best_val_query_shift_worst_rice_stage_macro_f1",
+        "best_val_query_shift_plus_rice_stage_macro_f1",
+        "best_val_query_shift_minus_rice_stage_macro_f1",
+        "final_val_query_shift_avg_rice_stage_macro_f1",
+        "final_val_query_shift_worst_rice_stage_macro_f1",
+        "final_val_query_shift_plus_rice_stage_macro_f1",
+        "final_val_query_shift_minus_rice_stage_macro_f1",
+    ):
+        source = best if key.startswith("best_") else final
+        metric_key = key.replace("best_", "").replace("final_", "")
+        summary[key] = source.get(metric_key)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "metrics_summary.json").write_text(json.dumps(summary, indent=2))
     markdown = "\n".join(
@@ -300,6 +313,8 @@ def main() -> None:
         use_aux_features=use_aux_features,
         aux_feature_set=aux_feature_set,
         random_time_shift_days=int(config.get("random_time_shift_days", 0)),
+        random_query_shift_days=int(config.get("random_query_shift_days", 0)),
+        random_query_shift_prob=float(config.get("random_query_shift_prob", 1.0)),
         query_doy_dropout_prob=float(config.get("query_doy_dropout_prob", 0.0)),
         time_doy_dropout_prob=float(config.get("time_doy_dropout_prob", 0.0)),
         use_spectral_indices=use_spectral_indices,
@@ -348,6 +363,38 @@ def main() -> None:
             config=config,
         ),
     )
+    extra_val_loaders: dict[str, DataLoader] = {}
+    robust_val_query_shift_days = int(config.get("robust_val_query_shift_days", 0))
+    if robust_val_query_shift_days > 0:
+        for name, query_shift in (
+            ("query_shift_plus", float(robust_val_query_shift_days)),
+            ("query_shift_minus", float(-robust_val_query_shift_days)),
+        ):
+            extra_val_ds = QueryDatePatchDataset(
+                npz_path=resolve_path(config["dataset_npz"]),
+                split_csv=split_csv_path,
+                split=split_val,
+                normalization_json=resolve_path(config["normalization_json"]),
+                rice_stage_loss_only=bool(config.get("rice_stage_loss_only", True)),
+                include_valid_mask_as_channels=bool(config.get("include_valid_mask_as_channels", False)),
+                use_aux_features=use_aux_features,
+                aux_feature_set=aux_feature_set,
+                use_spectral_indices=use_spectral_indices,
+                spectral_index_stats_json=spectral_index_stats_json,
+                use_relative_doy=bool(config.get("use_relative_doy", False)),
+                fixed_time_shift_days=0.0,
+                fixed_query_doy_shift_days=query_shift,
+            )
+            extra_val_loaders[name] = DataLoader(
+                extra_val_ds,
+                **build_dataloader_kwargs(
+                    batch_size=int(config["batch_size"]),
+                    shuffle=False,
+                    num_workers=num_workers,
+                    pin_memory=pin_memory,
+                    config=config,
+                ),
+            )
 
     model = build_model(model_type, model_config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(config["learning_rate"]), weight_decay=float(config.get("weight_decay", 0.01)))
@@ -394,6 +441,7 @@ def main() -> None:
         crop_class_weights=crop_class_weights,
         stage_class_weights=stage_class_weights,
         point_crop_consistency_loss_weight=float(config.get("point_crop_consistency_loss_weight", 0.0)),
+        extra_val_loaders=extra_val_loaders or None,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "history.json").write_text(json.dumps(history, indent=2))

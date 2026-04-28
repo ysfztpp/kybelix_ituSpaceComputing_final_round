@@ -81,6 +81,8 @@ class QueryDatePatchDataset(Dataset):
         use_aux_features: bool = False,
         aux_feature_set: str = "summary",
         random_time_shift_days: int = 0,
+        random_query_shift_days: int = 0,
+        random_query_shift_prob: float = 1.0,
         fixed_time_shift_days: float = 0.0,
         fixed_query_doy_shift_days: float | None = None,
         query_doy_dropout_prob: float = 0.0,
@@ -108,6 +110,8 @@ class QueryDatePatchDataset(Dataset):
         self.use_aux_features = bool(use_aux_features)
         self.aux_feature_set = str(aux_feature_set)
         self.random_time_shift_days = int(random_time_shift_days)
+        self.random_query_shift_days = int(random_query_shift_days)
+        self.random_query_shift_prob = float(random_query_shift_prob)
         self.fixed_time_shift_days = float(fixed_time_shift_days)
         self.fixed_query_doy_shift_days = (
             float(self.fixed_time_shift_days) if fixed_query_doy_shift_days is None else float(fixed_query_doy_shift_days)
@@ -115,7 +119,10 @@ class QueryDatePatchDataset(Dataset):
         self.query_doy_dropout_prob = float(query_doy_dropout_prob)
         self.time_doy_dropout_prob = float(time_doy_dropout_prob)
         self.apply_random_temporal_augmentation = self.split == "train" and (
-            self.random_time_shift_days > 0 or self.query_doy_dropout_prob > 0.0 or self.time_doy_dropout_prob > 0.0
+            self.random_time_shift_days > 0
+            or self.random_query_shift_days > 0
+            or self.query_doy_dropout_prob > 0.0
+            or self.time_doy_dropout_prob > 0.0
         )
         self.has_fixed_temporal_shift = abs(self.fixed_time_shift_days) > 0.0 or abs(self.fixed_query_doy_shift_days) > 0.0
         self.enable_temporal_augmentation = self.apply_random_temporal_augmentation or self.has_fixed_temporal_shift
@@ -224,6 +231,9 @@ class QueryDatePatchDataset(Dataset):
                 positive_mask = time_doy > 0
                 time_doy[positive_mask] = np.clip(time_doy[positive_mask] + shift, 1.0, 366.0)
                 query_doy_value = float(np.clip(query_doy_value + shift, 1.0, 366.0))
+            if self.random_query_shift_days > 0 and float(np.random.random()) < self.random_query_shift_prob:
+                query_shift = float(np.random.randint(-self.random_query_shift_days, self.random_query_shift_days + 1))
+                query_doy_value = float(np.clip(query_doy_value + query_shift, 1.0, 366.0))
             if self.time_doy_dropout_prob > 0.0:
                 existing = self.arrays["time_mask"][sample_index].astype(bool)
                 drop_mask = (np.random.random(size=time_doy.shape[0]) < self.time_doy_dropout_prob) & existing
