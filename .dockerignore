@@ -11,3 +11,5 @@ region_train_*/
 artifacts/**
 !artifacts/normalization/
 !artifacts/normalization/**
+checkpoints/*
+!checkpoints/model.pt

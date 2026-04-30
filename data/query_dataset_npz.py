@@ -90,6 +90,7 @@ class QueryDatePatchDataset(Dataset):
         use_spectral_indices: bool = False,
         spectral_index_stats_json: Path | None = None,
         use_relative_doy: bool = False,
+        disabled_bands: list[str] | None = None,
     ) -> None:
         if torch is None:
             raise ImportError("torch is required for QueryDatePatchDataset. Install PyTorch before training.")
@@ -136,6 +137,8 @@ class QueryDatePatchDataset(Dataset):
             self._idx_mean = np.array([idx_stats["NDVI"]["mean"], idx_stats["EVI"]["mean"], idx_stats["LSWI"]["mean"]], dtype=np.float32).reshape(3, 1, 1)
             self._idx_std  = np.maximum(np.array([idx_stats["NDVI"]["std"],  idx_stats["EVI"]["std"],  idx_stats["LSWI"]["std"]],  dtype=np.float32), 1e-6).reshape(3, 1, 1)
         self.bands = self.arrays.get("bands", np.asarray([f"B{i:02d}" for i in range(1, self.arrays["patches"].shape[2] + 1)])).astype(str).tolist()
+        self.disabled_bands = [str(band) for band in (disabled_bands or [])]
+        self.disabled_band_indices = [self.bands.index(band) for band in self.disabled_bands if band in self.bands]
         self.aux_feature_names = aux_feature_names(self.bands, feature_set=self.aux_feature_set) if self.use_aux_features else []
         self.aux_feature_dim = len(self.aux_feature_names)
         rice_id = self._rice_class_id()
@@ -197,6 +200,11 @@ class QueryDatePatchDataset(Dataset):
         sample_index, stage_index, query_doy, crop_id, stage_weight = self.rows[item]
         raw_patches = self.arrays["patches"][sample_index]   # [T, 12, H, W]
         valid_pixel_mask = self.arrays["valid_pixel_mask"][sample_index].astype(bool)  # [T, 12, H, W]
+        if self.disabled_band_indices:
+            raw_patches = raw_patches.copy()
+            valid_pixel_mask = valid_pixel_mask.copy()
+            raw_patches[:, self.disabled_band_indices, :, :] = 0.0
+            valid_pixel_mask[:, self.disabled_band_indices, :, :] = False
 
         # Compute spectral indices from raw (unnormalized) patches before band normalization
         if self.use_spectral_indices:

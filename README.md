@@ -122,6 +122,15 @@ crop/stage prediction counts
 sample result rows
 ```
 
+## Operational Estimates
+
+The evaluator-facing resource and latency summary is in `SUBMISSION_READY.md`.
+In short, the submission ships one C20 checkpoint (`checkpoints/model.pt`, about
+13 MB), excludes raw imagery/training artifacts/extra checkpoints from the Docker
+context, uses the platform PyTorch CUDA base image, and is expected to finish a
+single platform inference run in about 1-2 minutes with a conservative 5 minute
+worst-case latency allowance.
+
 
 ## Dependencies
 

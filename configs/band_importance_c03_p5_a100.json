@@ -1,0 +1,33 @@
+{
+  "dataset_npz": "artifacts/patches_clean/train_cnn_transformer_15x15.npz",
+  "normalization_json": "artifacts/normalization/train_patch_band_stats.json",
+  "split_csv": "artifacts/splits/train_val_split.csv",
+  "checkpoint": "organized_bundle/checkpoints/c03_full_data_model.pt",
+  "output_json": "artifacts/band_importance/c03_p5_a100_band_importance.json",
+  "output_markdown": "artifacts/band_importance/c03_p5_a100_band_importance.md",
+  "split": "val",
+  "seed": 42,
+  "batch_size": 2048,
+  "num_workers": 8,
+  "persistent_workers": true,
+  "prefetch_factor": 4,
+  "device": "auto",
+  "amp": true,
+  "allow_tf32": true,
+  "crop_loss_weight": 1.0,
+  "stage_loss_weight": 0.6,
+  "rice_stage_loss_only": true,
+  "include_valid_mask_as_channels": true,
+  "use_aux_features": false,
+  "use_relative_doy": false,
+  "stage_postprocess": "none",
+  "candidate_bands_order": ["B01", "B09", "B02", "B03", "B05", "B06", "B07", "B8A", "B12", "B11", "B04", "B08"],
+  "band_groups": {
+    "atmospheric": ["B01", "B09"],
+    "visible_without_red": ["B02", "B03"],
+    "red_edge": ["B05", "B06", "B07"],
+    "nir": ["B08", "B8A"],
+    "swir": ["B11", "B12"]
+  },
+  "note": "Deterministic C03 ablation. No random dropout, no query-shift loader. Candidate order starts from likely low-value atmospheric bands and moves toward likely high-value vegetation bands."
+}

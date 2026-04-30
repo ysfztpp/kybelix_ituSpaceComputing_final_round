@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 import sys
 from pathlib import Path
@@ -17,6 +18,7 @@ from data.transforms import NpzPatchNormalizer
 from models.model_factory import build_model, build_model_config, normalize_model_type
 from preprocessing.constants import BAND_ORDER, INVALID_FILL_VALUE, PATCH_SIZE
 from preprocessing.dataset import build_patch_dataset
+from preprocessing.raster_io import rasterio
 from training.stage_decoding import maybe_decode_stages
 
 try:
@@ -138,6 +140,52 @@ def apply_crop_consistency(crop_logits: np.ndarray, query_rows: pd.DataFrame) ->
         for idx in group_indices:
             result[idx] = majority_crop
     return result
+
+
+def apply_output_key_consistency(
+    crop_pred: np.ndarray,
+    stage_pred: np.ndarray,
+    query_rows: pd.DataFrame,
+    crop_logits: np.ndarray | None = None,
+    stage_logits: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Force identical predictions for rows that collapse to the same output key.
+
+    The evaluation output is keyed by longitude/latitude/date, so duplicate rows
+    must resolve to one label pair. This removes arbitrary "keep first row"
+    behavior when overlapping source regions produce the same logical query key.
+    """
+
+    crop_out = crop_pred.copy()
+    stage_out = stage_pred.copy()
+    rows_reset = query_rows.reset_index(drop=True)
+    key_to_indices: dict[str, list[int]] = {}
+    for idx, row in rows_reset.iterrows():
+        key = f"{row['longitude_key']}_{row['latitude_key']}_{row['date_key']}"
+        key_to_indices.setdefault(key, []).append(int(idx))
+
+    for indices in key_to_indices.values():
+        if len(indices) <= 1:
+            continue
+
+        crop_vote = np.bincount(crop_out[indices], minlength=len(CROP_TYPE_NAMES))
+        crop_best = np.flatnonzero(crop_vote == crop_vote.max())
+        if len(crop_best) == 1 or crop_logits is None:
+            crop_label = int(crop_best[0])
+        else:
+            crop_label = int(crop_best[np.argmax(crop_logits[indices][:, crop_best].sum(axis=0))])
+
+        stage_vote = np.bincount(stage_out[indices], minlength=len(PHENOPHASE_NAMES))
+        stage_best = np.flatnonzero(stage_vote == stage_vote.max())
+        if len(stage_best) == 1 or stage_logits is None:
+            stage_label = int(stage_best[0])
+        else:
+            stage_label = int(stage_best[np.argmax(stage_logits[indices][:, stage_best].sum(axis=0))])
+
+        crop_out[indices] = crop_label
+        stage_out[indices] = stage_label
+
+    return crop_out, stage_out
 
 
 def load_model(checkpoint: Path, device: torch.device):
@@ -274,6 +322,23 @@ def write_result(query_rows: pd.DataFrame, crop_pred: np.ndarray, stage_pred: np
     }
 
 
+def _gdal_env_options(config: dict[str, Any]) -> dict[str, Any]:
+    options = dict(config.get("gdal_env", {}))
+    normalized: dict[str, Any] = {}
+    for key, value in options.items():
+        if isinstance(value, bool):
+            normalized[str(key)] = "TRUE" if value else "FALSE"
+        else:
+            normalized[str(key)] = value
+    return normalized
+
+
+def _patch_dataset_context(config: dict[str, Any]):
+    if not bool(config.get("use_gdal_env", False)):
+        return nullcontext()
+    return rasterio.Env(**_gdal_env_options(config))
+
+
 def run_inference(config: dict[str, Any]) -> dict[str, Any]:
     input_root = Path(config.get("input_root", "/input"))
     points_csv = find_points_csv(input_root)
@@ -284,21 +349,29 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
     patch_cfg = config.get("preprocessing", {})
 
     work_dir.mkdir(parents=True, exist_ok=True)
-    report = build_patch_dataset(
-        points_csv=points_csv,
-        tiff_dirs=[tiff_dir],
-        output_npz=test_npz,
-        output_dir=work_dir,
-        root=input_root,
-        mode="test",
-        patch_size=int(patch_cfg.get("patch_size", PATCH_SIZE)),
-        allow_nearest_fallback=True,
-        band_order=list(patch_cfg.get("bands", BAND_ORDER)),
-        valid_min_exclusive=float(patch_cfg.get("valid_min_exclusive", 0.0)),
-        valid_max_inclusive=float(patch_cfg.get("valid_max_inclusive", 2.0)),
-        invalid_fill_value=float(patch_cfg.get("invalid_fill_value", INVALID_FILL_VALUE)),
-        write_reports=False,
-    )
+    with _patch_dataset_context(config):
+        report = build_patch_dataset(
+            points_csv=points_csv,
+            tiff_dirs=[tiff_dir],
+            output_npz=test_npz,
+            output_dir=work_dir,
+            root=input_root,
+            mode="test",
+            patch_size=int(patch_cfg.get("patch_size", PATCH_SIZE)),
+            allow_nearest_fallback=True,
+            band_order=list(patch_cfg.get("bands", BAND_ORDER)),
+            valid_min_exclusive=float(patch_cfg.get("valid_min_exclusive", 0.0)),
+            valid_max_inclusive=float(patch_cfg.get("valid_max_inclusive", 2.0)),
+            invalid_fill_value=float(patch_cfg.get("invalid_fill_value", INVALID_FILL_VALUE)),
+            write_reports=False,
+            skip_bands=list(config.get("skip_bands", patch_cfg.get("skip_bands", []))),
+            batch_raster_reads=bool(config.get("batch_raster_reads", False)),
+            max_batch_union_pixels=int(config.get("max_batch_union_pixels", 262144)),
+            max_batch_union_overread_ratio=float(config.get("max_batch_union_overread_ratio", 6.0)),
+            block_raster_reads=bool(config.get("block_raster_reads", False)),
+            max_block_pixels=int(config.get("max_block_pixels", 1048576)),
+            max_block_overread_ratio=float(config.get("max_block_overread_ratio", 12.0)),
+        )
 
     device = select_device(str(config.get("device", "auto")))
     default_checkpoint = resolve_path(config.get("checkpoint", "checkpoints/model.pt"))
@@ -383,7 +456,7 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
         crop_pred = crop_logits_all.argmax(axis=1)
     stage_logits = np.concatenate(stage_logit_chunks, axis=0)
     stage_postprocess = str(config.get("stage_postprocess", "none"))
-    use_bijection = bool(config.get("use_point_stage_bijection", True))
+    use_bijection = bool(config.get("use_point_stage_bijection", False))
     stage_pred = maybe_decode_stages(
         torch.from_numpy(stage_logits),
         torch.from_numpy(query_rows["point_id"].to_numpy(dtype=np.int64)),
@@ -394,6 +467,13 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
     # by DOY and assign the first N stages in biological order. Works for any N.
     if use_bijection:
         stage_pred = apply_point_stage_bijection(stage_pred, query_rows)
+    crop_pred, stage_pred = apply_output_key_consistency(
+        crop_pred,
+        stage_pred,
+        query_rows,
+        crop_logits=crop_logits_all,
+        stage_logits=stage_logits,
+    )
     result_stats = write_result(query_rows, crop_pred, stage_pred, output_json)
     return {
         "output_json": str(output_json),
@@ -409,18 +489,28 @@ def run_inference(config: dict[str, Any]) -> dict[str, Any]:
         "crop_checkpoint": str(crop_checkpoint),
         "stage_checkpoint": str(stage_checkpoint),
         "ensemble_checkpoints": [str(p) for p in ensemble_paths],
+        "use_gdal_env": bool(config.get("use_gdal_env", False)),
+        "gdal_env": _gdal_env_options(config) if bool(config.get("use_gdal_env", False)) else {},
+        "skip_bands": list(config.get("skip_bands", patch_cfg.get("skip_bands", []))),
+        "batch_raster_reads": bool(config.get("batch_raster_reads", False)),
+        "block_raster_reads": bool(config.get("block_raster_reads", False)),
         "use_crop_consistency": bool(use_crop_consistency),
         "use_point_stage_bijection": bool(use_bijection),
         "crop_model_uses_mask_channels": bool(int(crop_model.config.in_channels) == 24),
         "stage_model_uses_mask_channels": bool(int(stage_model.config.in_channels) == 24),
-        "crop_model_uses_aux_features": bool(int(crop_model.config.aux_feature_dim) > 0),
-        "stage_model_uses_aux_features": bool(int(stage_model.config.aux_feature_dim) > 0),
+        "crop_model_uses_aux_features": bool(getattr(crop_model, "crop_aux_proj", None) is not None),
+        "stage_model_uses_aux_features": bool(getattr(stage_model, "stage_aux_proj", None) is not None),
         "crop_model_type": str(getattr(crop_model, "model_type", "query_cnn_transformer")),
         "stage_model_type": str(getattr(stage_model, "model_type", "query_cnn_transformer")),
         "crop_model_uses_relative_doy": bool(getattr(crop_model, "use_relative_doy", False)),
         "stage_model_uses_relative_doy": bool(getattr(stage_model, "use_relative_doy", False)),
         "model_uses_mask_channels": bool(int(crop_model.config.in_channels) == 24 or int(stage_model.config.in_channels) == 24),
-        "model_uses_aux_features": bool(int(crop_model.config.aux_feature_dim) > 0 or int(stage_model.config.aux_feature_dim) > 0),
+        "model_uses_aux_features": bool(
+            getattr(crop_model, "crop_aux_proj", None) is not None
+            or getattr(crop_model, "stage_aux_proj", None) is not None
+            or getattr(stage_model, "crop_aux_proj", None) is not None
+            or getattr(stage_model, "stage_aux_proj", None) is not None
+        ),
         "stage_postprocess": stage_postprocess,
         "result_stats": result_stats,
         "patch_report": report,

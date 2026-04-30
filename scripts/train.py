@@ -295,6 +295,7 @@ def main() -> None:
     use_aux_features = bool(config.get("use_aux_features", False))
     aux_feature_set = str(config.get("aux_feature_set", "summary"))
     use_spectral_indices = bool(config.get("use_spectral_indices", False))
+    disabled_bands = list(config.get("disabled_bands", []))
     _idx_stats_raw = config.get("spectral_index_stats_json", None)
     spectral_index_stats_json = resolve_path(_idx_stats_raw) if _idx_stats_raw else None
     _split_csv_raw = config.get("split_csv")
@@ -320,6 +321,7 @@ def main() -> None:
         use_spectral_indices=use_spectral_indices,
         spectral_index_stats_json=spectral_index_stats_json,
         use_relative_doy=bool(config.get("use_relative_doy", False)),
+        disabled_bands=disabled_bands,
     )
     val_ds = QueryDatePatchDataset(
         npz_path=resolve_path(config["dataset_npz"]),
@@ -333,6 +335,7 @@ def main() -> None:
         use_spectral_indices=use_spectral_indices,
         spectral_index_stats_json=spectral_index_stats_json,
         use_relative_doy=bool(config.get("use_relative_doy", False)),
+        disabled_bands=disabled_bands,
     )
     if use_aux_features:
         model_config_data["aux_feature_dim"] = int(train_ds.aux_feature_dim)
@@ -382,6 +385,7 @@ def main() -> None:
                 use_spectral_indices=use_spectral_indices,
                 spectral_index_stats_json=spectral_index_stats_json,
                 use_relative_doy=bool(config.get("use_relative_doy", False)),
+                disabled_bands=disabled_bands,
                 fixed_time_shift_days=0.0,
                 fixed_query_doy_shift_days=query_shift,
             )
@@ -411,6 +415,7 @@ def main() -> None:
         "task": "point_date_crop_stage_classification",
         "aux_feature_names": train_ds.aux_feature_names,
         "aux_feature_set": aux_feature_set if use_aux_features else None,
+        "disabled_bands": disabled_bands,
         "git": git_metadata,
     }
     history = fit_query(

@@ -66,6 +66,7 @@ def main() -> None:
     use_aux_features = bool(config.get("use_aux_features", False))
     aux_feature_set = str(config.get("aux_feature_set", "summary"))
     use_spectral_indices = bool(config.get("use_spectral_indices", False))
+    disabled_bands = list(config.get("disabled_bands", []))
     _idx_stats_raw = config.get("spectral_index_stats_json", None)
     spectral_index_stats_json = resolve_path(_idx_stats_raw) if _idx_stats_raw else None
 
@@ -86,6 +87,7 @@ def main() -> None:
         use_spectral_indices=use_spectral_indices,
         spectral_index_stats_json=spectral_index_stats_json,
         use_relative_doy=bool(config.get("use_relative_doy", False)),
+        disabled_bands=disabled_bands,
     )
 
     model_config_data = dict(config.get("model", {}))
@@ -126,6 +128,7 @@ def main() -> None:
         "task": "point_date_crop_stage_classification_full_data_fixed_epoch",
         "aux_feature_names": train_ds.aux_feature_names,
         "aux_feature_set": aux_feature_set if use_aux_features else None,
+        "disabled_bands": disabled_bands,
         "git": git_metadata,
         "selection_rule": str(config.get("selection_rule", "Fixed epoch selected before full-data training.")),
     }
@@ -176,6 +179,7 @@ def main() -> None:
         "final_train_competition_score": history[-1].get("train_competition_score") if history else None,
         "final_train_loss": history[-1].get("train_loss") if history else None,
         "model_config": config_asdict(model_config),
+        "disabled_bands": disabled_bands,
         "git": git_metadata,
     }
     (output_dir / "metrics_summary.json").write_text(json.dumps(summary, indent=2))

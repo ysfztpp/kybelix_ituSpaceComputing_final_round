@@ -1,0 +1,36 @@
+{
+  "input_root": "/input",
+  "output_json": "/output/result.json",
+  "checkpoint": "checkpoints/model.pt",
+  "crop_checkpoint": "checkpoints/model.pt",
+  "stage_checkpoint": "checkpoints/model.pt",
+  "normalization_json": "artifacts/normalization/train_patch_band_stats.json",
+  "work_dir": "/tmp/kybelix_submission_work",
+  "batch_size": 64,
+  "device": "auto",
+  "use_gdal_env": true,
+  "gdal_env": {
+    "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
+    "GDAL_READDIR_LIMIT_ON_OPEN": 0,
+    "GDAL_CACHEMAX": 2048,
+    "VSI_CACHE": "TRUE",
+    "VSI_CACHE_SIZE": 33554432
+  },
+  "skip_bands": ["B01", "B09"],
+  "batch_raster_reads": true,
+  "max_batch_union_pixels": 262144,
+  "max_batch_union_overread_ratio": 6.0,
+  "block_raster_reads": true,
+  "max_block_pixels": 1048576,
+  "max_block_overread_ratio": 12.0,
+  "use_crop_consistency": true,
+  "use_point_stage_bijection": false,
+  "stage_postprocess": "transition_viterbi",
+  "preprocessing": {
+    "patch_size": 15,
+    "bands": ["B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B09", "B11", "B12"],
+    "valid_min_exclusive": 0.0,
+    "valid_max_inclusive": 2.0,
+    "invalid_fill_value": 0.0
+  }
+}

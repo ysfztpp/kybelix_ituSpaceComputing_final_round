@@ -30,6 +30,52 @@ def load_json(path: Path) -> dict[str, Any]:
         fail(f"invalid JSON in {path}: {exc}")
 
 
+def inspect_checkpoint(path: Path, *, max_checkpoint_mb: float) -> dict[str, Any]:
+    if not path.exists():
+        fail(f"missing checkpoint: {path}")
+    checkpoint_mb = path.stat().st_size / (1024 * 1024)
+    if checkpoint_mb > max_checkpoint_mb:
+        fail(f"checkpoint is {checkpoint_mb:.2f} MB; GitHub normal file limit is about 100 MB")
+
+    try:
+        import torch
+    except ImportError as exc:
+        fail(f"PyTorch is required to validate the checkpoint: {exc}")
+
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    for key in ["model_config", "model_state_dict"]:
+        if key not in payload:
+            fail(f"checkpoint missing key: {key}")
+
+    model_type = normalize_model_type(payload.get("model_type", "query_cnn_transformer"))
+    model_config = build_model_config(model_type, payload["model_config"])
+    if model_config.in_channels not in {12, 24}:
+        fail(f"model in_channels must be 12 or 24, got {model_config.in_channels}")
+    if model_config.patch_size != 15:
+        fail(f"model patch_size must be 15, got {model_config.patch_size}")
+    if model_config.num_crop_classes != 3:
+        fail(f"model num_crop_classes must be 3, got {model_config.num_crop_classes}")
+    if model_config.num_phenophase_classes != 7:
+        fail(f"model num_phenophase_classes must be 7, got {model_config.num_phenophase_classes}")
+
+    model = build_model(model_type, model_config)
+    state = payload["model_state_dict"]
+    if any(key.startswith("_orig_mod.") for key in state):
+        state = {key.removeprefix("_orig_mod."): value for key, value in state.items()}
+    model.load_state_dict(state)
+
+    return {
+        "checkpoint": str(path),
+        "checkpoint_mb": round(checkpoint_mb, 2),
+        "checkpoint_epoch": payload.get("epoch"),
+        "checkpoint_metric": payload.get("checkpoint_metric", "val_loss_legacy"),
+        "best_metric_value": payload.get("best_metric_value"),
+        "best_val_loss": payload.get("best_val_loss"),
+        "model_type": model_type,
+        "model_config": payload["model_config"],
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Validate Track 1 submission files before pushing.")
     parser.add_argument("--config", type=Path, default=ROOT / "configs" / "submission.json")
@@ -45,13 +91,6 @@ def main() -> None:
     output_json = Path(config["output_json"])
     if not output_json.is_absolute() or output_json.name != "result.json":
         fail(f"Track 1 output must be an absolute path ending with result.json, got {output_json}")
-
-    checkpoint = resolve_path(config["checkpoint"])
-    if not checkpoint.exists():
-        fail(f"missing checkpoint: {checkpoint}. Put your trained file at checkpoints/model.pt")
-    checkpoint_mb = checkpoint.stat().st_size / (1024 * 1024)
-    if checkpoint_mb > args.max_checkpoint_mb:
-        fail(f"checkpoint is {checkpoint_mb:.2f} MB; GitHub normal file limit is about 100 MB")
 
     normalization_json = resolve_path(config["normalization_json"])
     if not normalization_json.exists():
@@ -74,45 +113,37 @@ def main() -> None:
     if int(patch_cfg.get("patch_size", 0)) != 15:
         fail(f"submission patch_size must be 15, got {patch_cfg.get('patch_size')}")
 
-    try:
-        import torch
-    except ImportError as exc:
-        fail(f"PyTorch is required to validate the checkpoint: {exc}")
+    checkpoint_paths: dict[str, Path] = {
+        "checkpoint": resolve_path(config["checkpoint"]),
+    }
+    if "crop_checkpoint" in config:
+        checkpoint_paths["crop_checkpoint"] = resolve_path(config["crop_checkpoint"])
+    if "stage_checkpoint" in config:
+        checkpoint_paths["stage_checkpoint"] = resolve_path(config["stage_checkpoint"])
+    for index, ensemble_value in enumerate(config.get("ensemble_checkpoints", [])):
+        checkpoint_paths[f"ensemble_checkpoints[{index}]"] = resolve_path(ensemble_value)
 
-    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    for key in ["model_config", "model_state_dict"]:
-        if key not in payload:
-            fail(f"checkpoint missing key: {key}")
-
-    model_type = normalize_model_type(payload.get("model_type", "query_cnn_transformer"))
-    model_config = build_model_config(model_type, payload["model_config"])
-    if model_config.in_channels not in {12, 24}:
-        fail(f"model in_channels must be 12 or 24, got {model_config.in_channels}")
-    if model_config.patch_size != 15:
-        fail(f"model patch_size must be 15, got {model_config.patch_size}")
-    if model_config.num_crop_classes != 3:
-        fail(f"model num_crop_classes must be 3, got {model_config.num_crop_classes}")
-    if model_config.num_phenophase_classes != 7:
-        fail(f"model num_phenophase_classes must be 7, got {model_config.num_phenophase_classes}")
-
-    model = build_model(model_type, model_config)
-    state = payload["model_state_dict"]
-    if any(key.startswith("_orig_mod.") for key in state):
-        state = {key.removeprefix("_orig_mod."): value for key, value in state.items()}
-    model.load_state_dict(state)
+    inspected: dict[str, dict[str, Any]] = {}
+    seen: dict[Path, dict[str, Any]] = {}
+    for label, path in checkpoint_paths.items():
+        resolved = path.resolve()
+        if resolved not in seen:
+            seen[resolved] = inspect_checkpoint(path, max_checkpoint_mb=args.max_checkpoint_mb)
+        inspected[label] = seen[resolved]
 
     print(
         json.dumps(
             {
                 "status": "ok",
-                "checkpoint": str(checkpoint),
-                "checkpoint_mb": round(checkpoint_mb, 2),
-                "checkpoint_epoch": payload.get("epoch"),
-                "checkpoint_metric": payload.get("checkpoint_metric", "val_loss_legacy"),
-                "best_metric_value": payload.get("best_metric_value"),
-                "best_val_loss": payload.get("best_val_loss"),
-                "model_type": model_type,
-                "model_config": payload["model_config"],
+                "checkpoint": inspected["checkpoint"]["checkpoint"],
+                "checkpoint_mb": inspected["checkpoint"]["checkpoint_mb"],
+                "checkpoint_epoch": inspected["checkpoint"]["checkpoint_epoch"],
+                "checkpoint_metric": inspected["checkpoint"]["checkpoint_metric"],
+                "best_metric_value": inspected["checkpoint"]["best_metric_value"],
+                "best_val_loss": inspected["checkpoint"]["best_val_loss"],
+                "model_type": inspected["checkpoint"]["model_type"],
+                "model_config": inspected["checkpoint"]["model_config"],
+                "checked_checkpoints": inspected,
                 "output_json": str(output_json),
             },
             indent=2,
