@@ -75,7 +75,13 @@ if [ -z "${LAYER}" ]; then
   echo "[build] ERROR no layer tar inside ${DELTA_PATH}" >&2
   exit 1
 fi
-CONTENTS="$(tar -xOf "${DELTA_PATH}" "${LAYER}" | tar -t 2>/dev/null)"
+# Extract the layer to a file first. Piping into `tar -t` without an explicit
+# `-f -` does not reliably read stdin, which silently yields an empty listing and
+# reports every path as missing.
+LAYER_TMP="$(mktemp -t layer.XXXXXX.tar)"
+trap 'rm -f "${LAYER_TMP}"' EXIT
+tar -xOf "${DELTA_PATH}" "${LAYER}" > "${LAYER_TMP}"
+CONTENTS="$(tar -tf "${LAYER_TMP}" 2>/dev/null | sed 's#^/##')"
 missing=0
 for required in "app/kybelix_orbit.py" "app/model/c03.onnx" "app/sample/demo_input.npz" "app/vendor/onnxruntime" "app/vendor/numpy"; do
   if printf '%s\n' "${CONTENTS}" | grep -q "^${required}"; then
