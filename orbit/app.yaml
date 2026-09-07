@@ -1,0 +1,45 @@
+# Uploaded to the platform at "Start Model Verification".
+# Two values must be edited before upload - see the CONFIRM notes below.
+
+format: 1.0
+app: c03-fulldatatrained
+version: 1.0.0
+pods:
+  # CONFIRM: this key must match the pod directory name the platform expects.
+  c03:
+    # CONFIRM: must match the image address shown on the model details page
+    # after "Initialize Image Repository". Do not guess it.
+    image: app/c03_fulldatatrained
+    tag: v1.0.0
+
+    # One-time task. Must finish inside 30 minutes or the platform fails the run;
+    # the measured ground runtime is ~1 second, so this is not a risk.
+    type: job
+
+    # Scratch path only. /output must NOT be listed here: results are downlinked
+    # from it. CONFIRM cleanup semantics with platform staff before changing.
+    clean_paths: /tmp/kybelix/
+
+    # No zip_file: the ONNX graph, band statistics and the bundled input all live
+    # inside the image (~16 MB), which the manual allows.
+
+    cmd: python3 /app/kybelix_orbit.py --output-dir /output --selftest
+
+    resources:
+      cpu: 2
+      mem: 4096M
+      # GPU 0 on purpose for the first flight. The model is 3.3M parameters and
+      # runs in ~1 s on CPU, so a GPU buys nothing and adds a failure mode
+      # (onnxruntime-gpu / TensorRT presence on the Orin node is unverified).
+      # Raise to 1 only after confirming a CUDA or TensorRT provider exists.
+      gpu: 0
+
+    network:
+      connect: null
+
+    storage:
+      # Required: this is the downlink directory.
+      output: true
+      # False for v1.0.0: the run is self-contained and does not read satellite
+      # imagery. Set true in a later version once the /rs layout is known.
+      rs: false

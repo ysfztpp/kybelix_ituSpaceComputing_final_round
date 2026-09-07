@@ -1,0 +1,9 @@
+{
+  "points": 30,
+  "query_rows": 210,
+  "timesteps": 29,
+  "bytes": 2709539,
+  "crop_accuracy_ground": 1.0,
+  "stage_accuracy_ground": 0.8095238095238095,
+  "note": "Labels are in-sample for the full-data C03 checkpoint. The orbit metric of record is ground-vs-orbit logit parity, not accuracy."
+}

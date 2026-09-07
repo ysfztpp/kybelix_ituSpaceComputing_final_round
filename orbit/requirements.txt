@@ -1,0 +1,14 @@
+# Spaceborne runtime dependencies. Deliberately minimal: the 300 MB image delta
+# cap rules out torch (aarch64 CUDA wheels alone exceed it) and the GDAL stack.
+# The model ships as a portable ONNX graph instead.
+#
+# onnxruntime is PINNED and must stay pinned. Verified on the SCS-01 Orin dev
+# node (aarch64, Python 3.10.12): 1.19.2 imports and runs; 1.23.2 aborts at
+# import with
+#   "cpuid_info warning: Unknown CPU vendor. cpuinfo_vendor value: 0"
+#   stl_vector.h:1130 Assertion '__n < this->size()' failed -> Fatal Python error
+# because its CPU detection cannot identify this virtualized ARM core.
+# Available providers on that node are Azure + CPU only: no CUDA, no TensorRT,
+# which is why app.yaml requests gpu: 0.
+numpy>=1.24,<3
+onnxruntime==1.19.2

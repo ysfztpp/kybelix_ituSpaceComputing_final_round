@@ -1,0 +1,30 @@
+{
+  "source_checkpoint": "c03_full_data_model.pt",
+  "epoch": 75,
+  "task": "point_date_crop_stage_classification_full_data_fixed_epoch",
+  "model_config": {
+    "in_channels": 24,
+    "patch_size": 15,
+    "cnn_embedding_dim": 256,
+    "transformer_dim": 256,
+    "transformer_layers": 4,
+    "attention_heads": 8,
+    "dropout": 0.18,
+    "num_crop_classes": 3,
+    "num_phenophase_classes": 7,
+    "use_query_doy": true,
+    "use_time_doy": true,
+    "aux_feature_dim": 0,
+    "aux_hidden_dim": 128
+  },
+  "in_channels": 24,
+  "patch_size": 15,
+  "opset": 17,
+  "parameters": 3275146,
+  "git": {
+    "commit": "493b941",
+    "branch": "fullDataTraining",
+    "dirty": true,
+    "status_short": "M configs/train_full_data_c03_epoch75.json"
+  }
+}
