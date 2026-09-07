@@ -62,5 +62,35 @@ if [ "${SIZE_BYTES}" -gt "${MAX_BYTES}" ]; then
   exit 1
 fi
 
+# 5. Prove the delta actually contains the runtime, not just the app files.
+#
+# image_tool.sh drives kaniko with --single-snapshot, so anything pip considers
+# "already satisfied" in the build environment silently produces no layer
+# content. That builds green and then dies on the satellite with
+# ModuleNotFoundError, which costs a verification round to discover. Check here
+# instead.
+echo "[build] verifying delta contents"
+LAYER="$(tar -tf "${DELTA_PATH}" | grep '\.tar$' | head -1)"
+if [ -z "${LAYER}" ]; then
+  echo "[build] ERROR no layer tar inside ${DELTA_PATH}" >&2
+  exit 1
+fi
+CONTENTS="$(tar -xOf "${DELTA_PATH}" "${LAYER}" | tar -t 2>/dev/null)"
+missing=0
+for required in "app/kybelix_orbit.py" "app/model/c03.onnx" "app/sample/demo_input.npz" "app/vendor/onnxruntime" "app/vendor/numpy"; do
+  if printf '%s\n' "${CONTENTS}" | grep -q "^${required}"; then
+    echo "[build]   present: ${required}"
+  else
+    echo "[build]   MISSING: ${required}" >&2
+    missing=1
+  fi
+done
+if [ "${missing}" -ne 0 ]; then
+  echo "[build] ERROR delta package is incomplete; do not upload it." >&2
+  echo "[build] The runtime is installed with pip --target /app/vendor precisely so" >&2
+  echo "[build] the kaniko snapshot captures it. Check the RUN pip step in the build log." >&2
+  exit 1
+fi
+
 echo "[build] OK. Download ${DELTA_NAME} from the environment's Output File List,"
 echo "[build] then upload it with app.yaml at Start Model Verification."
