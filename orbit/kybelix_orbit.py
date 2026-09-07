@@ -117,7 +117,7 @@ def format_coordinate(value: float) -> str:
     return text or "0"
 
 
-def make_session(model_path: Path, requested: str | None):
+def make_session(model_path: Path, requested: str | None, threads: int = 2):
     import onnxruntime  # noqa: PLC0415
 
     available = list(onnxruntime.get_available_providers())
@@ -130,9 +130,21 @@ def make_session(model_path: Path, requested: str | None):
 
     options = onnxruntime.SessionOptions()
     options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
+
+    # Thread counts MUST be set explicitly on this node. Its sysfs advertises 12
+    # CPUs while the cgroup allows 8, so onnxruntime's default thread-pool sizing
+    # calls pthread_setaffinity_np with an out-of-range mask. Older builds only
+    # warn ("Specify the number of threads explicitly so the affinity is not
+    # set"); 1.19.2+ turns the same condition into a std::vector out-of-range
+    # assertion and aborts the process. Setting these keeps ORT off that path.
+    options.intra_op_num_threads = max(1, int(threads))
+    options.inter_op_num_threads = 1
+    options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+
     session = onnxruntime.InferenceSession(str(model_path), options, providers=providers)
     log(f"providers available: {available}")
     log(f"providers in use:    {session.get_providers()}")
+    log(f"threads: intra={options.intra_op_num_threads} inter={options.inter_op_num_threads}")
     return session
 
 
@@ -151,7 +163,7 @@ def run(args: argparse.Namespace) -> dict:
     row_query_doy = bundle["row_query_doy"].astype(np.float32)
     log(f"bundle: {bundle['patches'].shape[0]} points, {len(row_point)} query rows, bands={len(bands)}")
 
-    session = make_session(model_path, args.provider)
+    session = make_session(model_path, args.provider, args.threads)
     graph_timesteps = int(session.get_inputs()[0].shape[1])
     log(f"graph fixed timesteps: T={graph_timesteps}")
 
@@ -262,6 +274,7 @@ def main() -> int:
     parser.add_argument("--output-dir", default=os.environ.get("OUTPUT_DIR", "/output"))
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--provider", default=None, help="Force an ONNX Runtime execution provider.")
+    parser.add_argument("--threads", type=int, default=2, help="intra_op threads; must be explicit on the Orin node.")
     parser.add_argument(
         "--selftest",
         action="store_true",
