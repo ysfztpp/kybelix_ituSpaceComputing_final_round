@@ -31,8 +31,12 @@ COPY sample /app/sample
 
 # Guards. The first two fail the build if the vendor directory did not
 # materialise; the third proves the graph actually loads on this architecture.
-RUN test -d /app/vendor/onnxruntime
-RUN python3 -c "import onnxruntime, numpy; assert '/app/vendor' in onnxruntime.__file__, onnxruntime.__file__; assert '/app/vendor' not in numpy.__file__, 'numpy should come from the base image'; print('vendored ort', onnxruntime.__version__, 'base numpy', numpy.__version__)"
+# onnxruntime must be vendored; numpy must NOT be, since the base image already
+# provides it at /usr/local/lib/python3.10/dist-packages (verified by probing
+# base/base:base directly). Assert on the filesystem, which is unambiguous,
+# rather than on substrings of a resolved module path.
+RUN test -d /app/vendor/onnxruntime && test ! -d /app/vendor/numpy
+RUN python3 -c "import onnxruntime, numpy; assert '/app/vendor' in onnxruntime.__file__, onnxruntime.__file__; print('vendored ort', onnxruntime.__version__, 'at', onnxruntime.__file__); print('numpy', numpy.__version__, 'at', numpy.__file__)"
 RUN python3 -c "import onnxruntime as o; s=o.SessionOptions(); s.intra_op_num_threads=2; s.inter_op_num_threads=1; o.InferenceSession('/app/model/c03.onnx', s, providers=['CPUExecutionProvider']); print('onnx session OK')"
 
 # The platform starts the application from the YAML cmd; this is the local default.
