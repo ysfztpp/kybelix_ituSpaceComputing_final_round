@@ -1,14 +1,24 @@
-# Spaceborne runtime dependencies. Deliberately minimal: the 300 MB image delta
-# cap rules out torch (aarch64 CUDA wheels alone exceed it) and the GDAL stack.
-# The model ships as a portable ONNX graph instead.
+# Spaceborne runtime dependencies. Installed with --no-deps into /app/vendor.
 #
-# onnxruntime is PINNED and must stay pinned. Verified on the SCS-01 Orin dev
-# node (aarch64, Python 3.10.12). 1.18.1 creates a working session; 1.19.2 and
-# 1.23.2 both ABORT the process (SIGABRT, exit 134) with
-#   "cpuid_info warning: Unknown CPU vendor. cpuinfo_vendor value: 0"
-#   stl_vector.h:1130 Assertion '__n < this->size()' failed -> Fatal Python error
-# because its CPU detection cannot identify this virtualized ARM core.
-# Available providers on that node are Azure + CPU only: no CUDA, no TensorRT,
-# which is why app.yaml requests gpu: 0.
-numpy>=1.24,<3
+# numpy is DELIBERATELY ABSENT: the platform base image already ships numpy
+# 1.26.4, and onnxruntime 1.18.1 runs against it (verified end to end on the
+# SCS-01 Orin node). Vendoring it again cost 59 MB for nothing.
+#
+# --no-deps is what keeps this small. onnxruntime's declared dependency tree
+# pulls sympy (57 MB) and mpmath (3.9 MB) for symbolic shape inference, plus
+# protobuf, none of which a fixed-shape inference session touches. Measured on
+# the Orin node: full dependency resolution = 142 MB, this list = 22 MB, with an
+# identical selftest result (parity 1.0000 on both heads).
+#
+# onnxruntime is PINNED and must stay pinned. 1.18.1 works; 1.19.2 and 1.23.2
+# both ABORT the process (SIGABRT, exit 134) at InferenceSession creation with
+#   stl_vector.h Assertion '__n < this->size()' failed
+# because the node advertises 12 CPUs in sysfs while the cgroup allows 8, and
+# their thread-pool sizing indexes past the end of its CPU vector.
 onnxruntime==1.18.1
+
+# Small pure-Python imports onnxruntime needs at import time.
+coloredlogs
+humanfriendly
+flatbuffers
+packaging

@@ -83,7 +83,7 @@ trap 'rm -f "${LAYER_TMP}"' EXIT
 tar -xOf "${DELTA_PATH}" "${LAYER}" > "${LAYER_TMP}"
 CONTENTS="$(tar -tf "${LAYER_TMP}" 2>/dev/null | sed 's#^/##')"
 missing=0
-for required in "app/kybelix_orbit.py" "app/model/c03.onnx" "app/sample/demo_input.npz" "app/vendor/onnxruntime" "app/vendor/numpy"; do
+for required in "app/kybelix_orbit.py" "app/model/c03.onnx" "app/sample/demo_input.npz" "app/vendor/onnxruntime"; do
   if printf '%s\n' "${CONTENTS}" | grep -q "^${required}"; then
     echo "[build]   present: ${required}"
   else
