@@ -35,6 +35,21 @@ else
   echo "[build] WARNING an image built on the wrong base will fail the container-start stage." >&2
 fi
 
+# 1b. Remove stale build state from any previous run.
+#
+# image_tool.sh drives kaniko unprivileged, so the Dockerfile's COPY and RUN
+# steps write into this pod's REAL filesystem at /app rather than an isolated
+# rootfs. Anything a previous build left there is still present for the next
+# one: pip reports "Target directory /app/vendor/... already exists" and skips
+# it, the guards see packages nobody asked for, and --single-snapshot can sweep
+# the leftovers into the delta. A stale /app is how a 22 MB dependency set
+# turns back into a 142 MB one.
+STALE_DIR="${STALE_DIR:-/app}"
+if [ -d "${STALE_DIR}" ]; then
+  echo "[build] removing stale build state: ${STALE_DIR} ($(du -sh "${STALE_DIR}" 2>/dev/null | cut -f1))"
+  rm -rf "${STALE_DIR}"
+fi
+
 # 2. Required payload must be present before we spend build time.
 for required in kybelix_orbit.py requirements.txt model/c03.onnx model/band_stats.json sample/demo_input.npz; do
   if [ ! -f "${HERE}/${required}" ]; then
